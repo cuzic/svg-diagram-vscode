@@ -72,6 +72,13 @@ test('isDiagramSource: imports the DSL itself and has a default export; not the 
   assert.ok(!isDiagramSource('a.ts', "import {x} from 'svg-diagram-extra';" + def));
 });
 
+test('isDiagramSource: a default export re-exported from another module counts; one only in a comment does not', () => {
+  assert.ok(isDiagramSource('a.ts', "import {diagram} from 'svg-diagram';\nexport {default} from './other.ts';"));
+  assert.ok(!isDiagramSource('parts.ts', "import {box} from 'svg-diagram';\n// export default function define() {}\nexport const x = 1;"));
+  assert.ok(!isDiagramSource('parts.ts', "import {box} from 'svg-diagram';\n/* export default define */\nexport const x = 1;"));
+  assert.ok(isDiagramSource('a.ts', "import {box} from 'svg-diagram';\nconst url = 'https://example.com'; export default () => box({title: url});"));
+});
+
 test('isDiagramSource: a module of shared parts (no default export) is not a diagram', () => {
   assert.ok(!isDiagramSource('parts.ts', "import {box} from 'svg-diagram';\nexport const step = (t: string) => box({title: t});"));
 });

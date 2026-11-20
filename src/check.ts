@@ -92,13 +92,20 @@ export function findingMessage(f: Finding): string {
 
 /**
  * A diagram source imports the DSL (`from 'svg-diagram'`; 'svg-diagram/browser' is for pages, not sources) and has a
- * default export (the `define()` that build and check call). A module of shared parts imports the DSL too, but has no
+ * default export (the `define()` that build and check call; core only asks that it is a function). Comments do not count. A module of shared parts imports the DSL too, but has no
  * default export: it is not a diagram, and check / build would fail on it.
  */
 export function isDiagramSource(fileName: string, text: string): boolean {
   if (!/\.(m?ts|m?js)$/.test(fileName) || /\.d\.ts$/.test(fileName)) return false;
-  const importsDsl = /\bfrom\s+['"]svg-diagram['"]|\brequire\(\s*['"]svg-diagram['"]\s*\)|\bimport\(\s*['"]svg-diagram['"]\s*\)/.test(text);
-  return importsDsl && /\bexport\s+default\b|\bexport\s*\{[^}]*\bas\s+default\b/.test(text);
+  const code = withoutComments(text);
+  const importsDsl = /\bfrom\s+['"]svg-diagram['"]|\bimport\(\s*['"]svg-diagram['"]\s*\)/.test(code);
+  // `export default ...`, `export {define as default}`, `export {default} from './x.ts'`
+  return importsDsl && /\bexport\s+default\b|\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(code);
+}
+
+/** Drops block comments and line comments (a `//` at the start of a line or after a space: not `https://` in a string). */
+function withoutComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/.*$/gm, '$1');
 }
 
 /**

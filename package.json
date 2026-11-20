@@ -95,13 +95,13 @@
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "図のソース（`from 'svg-diagram'` を import している `.ts` / `.mts` / `.js` / `.mjs`）を保存したときに検査する。"
+          "markdownDescription": "図のソース（`from 'svg-diagram'` を import し `export default` がある `.ts` / `.mts` / `.js` / `.mjs`）を保存したときに検査する。同じワークスペースフォルダの共通部品（図でないスクリプト）や `.svg-diagram.json` を保存したときは、開いている図のソースを検査し直す。"
         },
         "svgDiagram.check.onOpen": {
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "図のソースを開いたときに検査する（まだ所見がないとき）。"
+          "markdownDescription": "図のソースを開いたとき（名前を変えたとき・拡張が起動したときも）に検査する。エディタの外で変わっていることがあるので、開くたびに検査し直す。"
         }
       }
     },

@@ -22,6 +22,9 @@
 - 共通部品のモジュール（svg-diagram を import するが `export default` が無い）は図ではないので、検査もプレビューもしない。
 - 同じディレクトリのファイルをまとめて 1 回の CLI で検査し、cwd はそのディレクトリ（`.svg-diagram.json` はそこから上へ探される）。
 - 検査中に 1 つのファイルを保存しても、他のファイルの検査は止めない（そのファイルだけ新しい結果を使う）。
+- 同時に走らせる CLI は CPU コア数の半分まで。
+- 共通部品や `.svg-diagram.json` を保存すると、同じワークスペースフォルダで開いている図のソースを検査し直す。
+- わかっている限界: 開いたままのファイルがエディタの外（git checkout など）で変わったとき、閉じているファイル（「すべて検査」の結果）が変わったときは、開き直すか保存するまで所見は古いまま。
 - error → エラー、warn → 警告、info → 情報。コードはルール名（`a11y-no-title` など）。CLI が直し方（`data.fix`）を返すときは、メッセージの 2 行目に出す。
 - 行番号を返すのは今は文書の検査（`doc-*`）だけ。レイアウトの所見は、帯の見出し（`data.band`）がソースの文字列に 1 回だけ現れればそこに、なければ 1 行目に付く（core がソースの位置を返すようになったら直す）。
 - core 0.5.0 以前は、ソースが throw すると JSON を出さずに止まる。そのときは stderr から、throw した行に `build-error` を付ける。
@@ -41,8 +44,8 @@
 
 ## 導入・型検査・ステータスバー
 
-- **「svg-diagram: この案件で svg-diagram を使えるようにする」**: lockfile から pnpm / yarn / bun / npm を選び、足りないもの（`svg-diagram`・`typescript`・`@types/node`）を `add -D` し、`package.json` の `"type": "module"` か `tsconfig.json` が無ければ `svg-diagram init` まで、見えるターミナルで実行する。実行前に、打つコマンドを見せて確認する。
-- **「svg-diagram: 型検査（typecheck）」**: svg-diagram を使うフォルダ（`node_modules/svg-diagram` か `.svg-diagram.json` がある）でだけ、`svg-diagram typecheck` をタスクとして走らせ、`$tsc` の problem matcher で「問題」パネルに出す。`tasks.json` にも書ける:
+- **「svg-diagram: この案件で svg-diagram を使えるようにする」**: ワークスペースフォルダの直下で、lockfile から pnpm / yarn / bun / npm を選び、足りないもの（`svg-diagram`・`typescript`・`@types/node`）を `add -D` し、`package.json` の `"type": "module"` か `tsconfig.json` が無ければ `svg-diagram init` まで、見えるターミナルで実行する。実行前に、打つコマンドを見せて確認する。
+- **「svg-diagram: 型検査（typecheck）」**: アクティブなファイルのプロジェクト（いちばん近い `package.json` のディレクトリ。monorepo の下のパッケージ）で、`svg-diagram typecheck` をタスクとして走らせ、`$tsc` の problem matcher で「問題」パネルに出す。タスク一覧には、svg-diagram を使うフォルダ（直下に `node_modules/svg-diagram` か `.svg-diagram.json` がある）にだけ出る。`tasks.json` にも書ける:
 
       {"type": "svg-diagram", "command": "typecheck", "problemMatcher": "$tsc"}
 

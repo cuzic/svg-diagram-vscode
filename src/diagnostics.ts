@@ -1,10 +1,12 @@
 // Runs `svg-diagram check --format json` and shows the findings in the Problems panel.
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import {checkArgs, crashFinding, type Finding, findingMessage, isDiagramSource, parseCheckOutput, placeFinding} from './check.ts';
 import type {ResolvedCli} from './cli.ts';
 import {exec} from './exec.ts';
-import {Runs} from './runs.ts';
+import {Runs, Semaphore} from './runs.ts';
 
 /** One CLI run checks at most this many files (the command line stays short; a stuck run loses little). */
 const BATCH = 40;
@@ -24,6 +26,8 @@ export class Checker implements vscode.Disposable {
   readonly collection = vscode.languages.createDiagnosticCollection('svg-diagram');
   /** Per file, the latest run wins; a run over many files is not cancelled by a save of one of them (see runs.ts). */
   private readonly runs = new Runs<string>();
+  /** CLI processes at once, over all runs (each loads core, fonts and resvg): half the cores. */
+  private readonly slots = new Semaphore(Math.max(1, Math.floor(os.availableParallelism() / 2)));
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly busyListeners = new Set<(busy: number) => void>();
   private readonly deps: CheckerDeps;
@@ -34,8 +38,11 @@ export class Checker implements vscode.Disposable {
     this.subscriptions.push(
       this.collection,
       vscode.workspace.onDidSaveTextDocument(doc => {
-        if (isSource(doc)) { if (setting<boolean>(doc.uri, 'check.onSave')) void this.check([doc.uri]); }
-        else this.collection.delete(doc.uri); // no longer a diagram source (the import or the default export went away)
+        if (doc.uri.scheme !== 'file') return;
+        if (isSource(doc)) { if (setting<boolean>(doc.uri, 'check.onSave')) void this.check([doc.uri]); return; }
+        this.collection.delete(doc.uri); // no longer a diagram source (the import or the default export went away)
+        // a shared part (or the project settings): the open diagrams of the same folder may import it
+        if (/\.(m?ts|m?js)$/.test(doc.fileName) || path.basename(doc.fileName) === '.svg-diagram.json') this.recheckOpen(vscode.workspace.getWorkspaceFolder(doc.uri), 'check.onSave');
       }),
       // re-checked on every open: the file may have changed outside the editor (a git checkout) since the last findings
       vscode.workspace.onDidOpenTextDocument(doc => { if (setting<boolean>(doc.uri, 'check.onOpen') && isSource(doc)) void this.check([doc.uri]); }),
@@ -51,11 +58,11 @@ export class Checker implements vscode.Disposable {
     );
   }
 
-  /** Checks what is open now (activation, settings change). */
-  recheckOpen(): void {
-    const docs = vscode.workspace.textDocuments.filter(isSource);
+  /** Checks the open diagram sources (activation, settings change; with a folder: a shared part of it was saved). */
+  recheckOpen(folder?: vscode.WorkspaceFolder, when: 'check.onOpen' | 'check.onSave' = 'check.onOpen'): void {
+    const docs = vscode.workspace.textDocuments.filter(d => isSource(d) && (!folder || vscode.workspace.getWorkspaceFolder(d.uri)?.uri.toString() === folder.uri.toString()));
     for (const d of docs) if (!setting<boolean>(d.uri, 'check.enabled')) this.collection.delete(d.uri);
-    const uris = docs.filter(d => setting<boolean>(d.uri, 'check.onOpen')).map(d => d.uri);
+    const uris = docs.filter(d => setting<boolean>(d.uri, when)).map(d => d.uri);
     if (uris.length) void this.check(uris);
   }
 
@@ -69,7 +76,9 @@ export class Checker implements vscode.Disposable {
    * current directory, so each file is checked from its own directory, as when it is checked alone.
    * A file whose CLI cannot be found is skipped (getCli has told the user), the others are still checked.
    */
-  async check(uris: vscode.Uri[]): Promise<void> {
+  async check(uris: vscode.Uri[], token?: vscode.CancellationToken): Promise<void> {
+    const cancel = new AbortController();
+    const sub = token?.onCancellationRequested(() => cancel.abort());
     const groups = new Map<string, {cli: ResolvedCli; cwd: string; uris: vscode.Uri[]}>();
     for (const uri of uris) {
       if (uri.scheme !== 'file') continue;
@@ -84,20 +93,28 @@ export class Checker implements vscode.Disposable {
     }
     const runs: Promise<void>[] = [];
     for (const {cli, cwd, uris: group} of groups.values()) {
-      for (let i = 0; i < group.length; i += BATCH) runs.push(this.run(cli, cwd, group.slice(i, i + BATCH)));
+      for (let i = 0; i < group.length; i += BATCH) runs.push(this.run(cli, cwd, group.slice(i, i + BATCH), cancel.signal));
     }
-    await Promise.all(runs);
+    try { await Promise.all(runs); } finally { sub?.dispose(); }
   }
 
-  private async run(cli: ResolvedCli, cwd: string, uris: vscode.Uri[]): Promise<void> {
+  /**
+   * One CLI run. It owns its files from the moment it is asked for (a later save takes a file over, even while this
+   * run still waits for a slot), and waits for a slot before it starts the process.
+   */
+  private async run(cli: ResolvedCli, cwd: string, uris: vscode.Uri[], cancel?: AbortSignal): Promise<void> {
     const run = this.runs.start(uris.map(u => u.toString()));
+    const signal = cancel ? AbortSignal.any([run.signal, cancel]) : run.signal;
     const files = uris.map(u => u.fsPath);
     const {log} = this.deps;
-    log.debug(`${cli.bin} ${checkArgs(files).join(' ')}（cwd: ${cwd}）`);
     this.setBusy(+1);
+    const release = await this.slots.acquire(signal);
     try {
-      const {stdout, stderr, error} = await exec(cli.bin, checkArgs(files), {cwd, signal: run.signal});
-      if (run.signal.aborted) return;
+      if (!release) return;
+      log.debug(`${cli.bin} ${checkArgs(files).join(' ')}（cwd: ${cwd}）`);
+      const {stdout, stderr, error} = await exec(cli.bin, checkArgs(files), {cwd, signal});
+      release();
+      if (signal.aborted) return;
       if (stderr.trim()) log.info(stderr.trim());
       let out: ReturnType<typeof parseCheckOutput>;
       try {
@@ -106,17 +123,17 @@ export class Checker implements vscode.Disposable {
         // exit 1 with JSON is normal (there were errors). No JSON: the CLI stopped, as core 0.5.0 does at the first
         // source that throws. One file: that file is the cause. Several: check them one by one to find which.
         if (!error) { log.error((e as Error).message); return; }
-        const mine = uris.filter(u => run.owns(u.toString()));
         if (uris.length > 1) {
-          this.runs.finish(run);
-          await eachLimited(mine, 4, u => this.run(cli, cwd, [u]));
+          // each per-file run takes its file over at once (so this run is done with it); they share the slots
+          await Promise.all(uris.filter(u => run.owns(u.toString())).map(u => this.run(cli, cwd, [u], cancel)));
           return;
         }
         const uri = uris[0];
-        if (!uri || !mine.length) return;
+        if (!uri || !run.owns(uri.toString())) return;
         const crash = crashFinding(uri.fsPath, stderr);
         log.error(`${uri.fsPath}: ${crash.message}`);
-        this.collection.set(uri, [toDiagnostic(crash, await textOf(uri))]);
+        const text = await textOf(uri);
+        if (run.owns(uri.toString()) && fs.existsSync(uri.fsPath)) this.collection.set(uri, [toDiagnostic(crash, text)]);
         return;
       }
       const byFile = new Map<string, Finding[]>(files.map(f => [path.resolve(f), []]));
@@ -124,7 +141,8 @@ export class Checker implements vscode.Disposable {
       for (const [file, findings] of byFile) {
         const asked = uris.find(u => path.resolve(u.fsPath) === file);
         const uri = asked ?? vscode.Uri.file(file);
-        const superseded = () => !!asked && !run.owns(asked.toString()); // a newer run has this file: its result counts
+        // a newer run has this file (its result counts), or it was deleted / renamed while this run was going
+        const superseded = () => (!!asked && !run.owns(asked.toString())) || !fs.existsSync(file);
         if (superseded()) continue;
         const text = await textOf(uri);
         if (superseded()) continue;
@@ -132,6 +150,7 @@ export class Checker implements vscode.Disposable {
       }
       log.info(`検査: ${files.length} 件、エラー ${out.errors}、警告 ${out.warnings}、所見 ${out.findings.length}`);
     } finally {
+      release?.();
       this.setBusy(-1);
       this.runs.finish(run);
     }
@@ -152,12 +171,6 @@ export class Checker implements vscode.Disposable {
     this.runs.abortAll();
     for (const s of this.subscriptions) s.dispose();
   }
-}
-
-async function eachLimited<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const worker = async () => { while (next < items.length) { const item = items[next++] as T; await fn(item); } };
-  await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
 }
 
 function toDiagnostic(f: Finding, text: string | undefined): vscode.Diagnostic {
@@ -188,7 +201,7 @@ async function textOf(uri: vscode.Uri): Promise<string | undefined> {
  */
 export async function findDiagramSources(token?: vscode.CancellationToken): Promise<vscode.Uri[]> {
   const excluded = Object.entries(vscode.workspace.getConfiguration('files').get<Record<string, unknown>>('exclude') ?? {})
-    .filter(([, on]) => on === true)
+    .filter(([glob, on]) => on === true && !/[{}]/.test(glob)) // nested braces are not a glob findFiles reads
     .map(([glob]) => glob);
   const exclude = `{${['**/node_modules/**', ...excluded].join(',')}}`;
   const candidates = await vscode.workspace.findFiles('**/*.{ts,mts,js,mjs}', exclude, undefined, token);

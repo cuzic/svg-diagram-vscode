@@ -35,10 +35,11 @@ export class SvgDiagramTaskProvider implements vscode.TaskProvider {
     return def.command === 'typecheck' && folder ? this.make(folder, def) : undefined;
   }
 
-  make(folder: vscode.WorkspaceFolder, def: SvgDiagramTaskDefinition): vscode.Task | undefined {
-    const cli = this.peekCli(folder.uri);
+  /** `scope` (a file) picks the CLI from its own directory up; `cwd` is where tsc runs (the project of that file). */
+  make(folder: vscode.WorkspaceFolder, def: SvgDiagramTaskDefinition, scope?: vscode.Uri, cwd = folder.uri.fsPath): vscode.Task | undefined {
+    const cli = this.peekCli(scope ?? folder.uri);
     if (!cli) return undefined;
-    const exec = new vscode.ProcessExecution(cli.bin, [def.command, ...(def.args ?? [])], {cwd: folder.uri.fsPath});
+    const exec = new vscode.ProcessExecution(cli.bin, [def.command, ...(def.args ?? [])], {cwd});
     const task = new vscode.Task(def, folder, '型検査（typecheck）', TASK_TYPE, exec, '$tsc');
     task.group = vscode.TaskGroup.Build;
     task.presentationOptions = {reveal: vscode.TaskRevealKind.Silent, clear: true};

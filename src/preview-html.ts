@@ -103,11 +103,11 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
 
   function show(msg) {
     $('title').textContent = msg.title;
+    // the drawing on the stage is of another source: never show it under this one's title
+    if (msg.kind !== 'svg' && shownFile !== msg.file) { stage.innerHTML = ''; natural = null; shownFile = null; }
     if (msg.kind === 'building') { state.textContent = '描いている…'; state.classList.remove('stale'); return; }
     if (msg.kind === 'error') {
       error.textContent = msg.message; error.classList.add('shown');
-      // the drawing on the stage is of another source: never show it under this one's title
-      if (shownFile !== msg.file) { stage.innerHTML = ''; natural = null; shownFile = null; }
       const has = !!stage.querySelector('svg');
       state.textContent = has ? '古い図（今のソースは描けない）' : '描けない'; state.classList.add('stale');
       return;

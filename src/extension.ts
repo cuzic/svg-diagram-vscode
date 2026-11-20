@@ -1,6 +1,8 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import * as vscode from 'vscode';
+import {isDiagramSource} from './check.ts';
 import {describeCli, type ResolveResult, type ResolvedCli, resolveCli} from './cli.ts';
 import {Checker, findDiagramSources} from './diagnostics.ts';
 import {isSource, PREVIEW_VIEW_TYPE, PreviewManager} from './preview.ts';
@@ -55,8 +57,12 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     vscode.commands.registerCommand('svgDiagram.typecheck', async () => {
       const folder = await pickFolder();
       if (!folder) return;
-      if (!getCli(folder.uri)) return;
-      const task = tasks.make(folder, {type: TASK_TYPE, command: 'typecheck'});
+      // in a monorepo the project is the package of the active file (nearest package.json up to the folder)
+      const active = vscode.window.activeTextEditor?.document.uri;
+      const inFolder = active?.scheme === 'file' && vscode.workspace.getWorkspaceFolder(active)?.uri.toString() === folder.uri.toString();
+      const cwd = inFolder && active ? projectDir(path.dirname(active.fsPath), folder.uri.fsPath) : folder.uri.fsPath;
+      if (!getCli(inFolder && active ? active : folder.uri)) return;
+      const task = tasks.make(folder, {type: TASK_TYPE, command: 'typecheck'}, inFolder ? active : undefined, cwd);
       if (task) await vscode.tasks.executeTask(task);
     }),
     vscode.commands.registerCommand('svgDiagram.setup', async () => {
@@ -71,6 +77,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       if (target?.scheme !== 'file') return void vscode.window.showInformationMessage('検査する図のソース（保存したファイル）を開いてから実行する');
       // check reads the file from disk: save it first when it is open with changes (and only that one)
       const open = vscode.workspace.textDocuments.find(d => d.uri.toString() === target.toString());
+      if (!(await isSourceFile(target))) return void vscode.window.showInformationMessage(`${path.basename(target.fsPath)} は図のソースではない（svg-diagram を import して export default するファイルが図）`);
       if (open?.isDirty) await open.save();
       await checker.check([target]);
     }),
@@ -79,7 +86,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
         const sources = await findDiagramSources(token);
         if (token.isCancellationRequested) return;
         if (!sources.length) return void vscode.window.showInformationMessage("図のソース（svg-diagram を import して export default するファイル）が見つからない");
-        await checker.check(sources);
+        await checker.check(sources, token);
       })),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('svgDiagram.cliPath')) { warned.clear(); logCliForAllFolders(); status.refresh(); }
@@ -95,10 +102,18 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   return {testing: {previewMessage: () => preview.lastMessage}};
 }
 
-function openPreview(preview: PreviewManager, uri: vscode.Uri | undefined, column: vscode.ViewColumn): void {
+async function openPreview(preview: PreviewManager, uri: vscode.Uri | undefined, column: vscode.ViewColumn): Promise<void> {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (target?.scheme !== 'file') return void vscode.window.showInformationMessage('プレビューする図のソース（保存したファイル）を開いてから実行する');
+  if (!(await isSourceFile(target))) return void vscode.window.showInformationMessage(`${path.basename(target.fsPath)} は図のソースではない（svg-diagram を import して export default するファイルが図）`);
   preview.show(target, column);
+}
+
+/** The explorer menu offers the commands on every script: look at the text (the open one, else the file). */
+async function isSourceFile(uri: vscode.Uri): Promise<boolean> {
+  const open = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
+  if (open) return isSource(open);
+  try { return isDiagramSource(uri.fsPath, new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))); } catch { return false; }
 }
 
 export function deactivate(): void {
@@ -130,6 +145,14 @@ export function getCli(scope?: vscode.Uri): ResolvedCli | undefined {
 /** The CLI without any warning (status bar, menu, task list: these must not nag in projects unrelated to svg-diagram). */
 function peekCli(scope: vscode.Uri | undefined): ResolvedCli | undefined {
   return process.platform === 'win32' ? undefined : lookup(scope).cli;
+}
+
+/** The nearest directory with a package.json, from `dir` up to (and including) `top`; `top` when there is none. */
+function projectDir(dir: string, top: string): string {
+  for (let d = dir; ; d = path.dirname(d)) {
+    if (fsSync.existsSync(path.join(d, 'package.json'))) return d;
+    if (d === top || path.dirname(d) === d || !d.startsWith(top)) return top;
+  }
 }
 
 /** The folder of the active editor; asks when there are several and none is active. */

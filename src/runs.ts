@@ -44,3 +44,38 @@ export class Runs<K> {
     this.latest.clear();
   }
 }
+
+/** At most `limit` holders at a time; waiters go in order. A waiter whose signal aborts leaves the queue. */
+export class Semaphore {
+  private held = 0;
+  private readonly waiting: (() => void)[] = [];
+  private readonly limit: number;
+
+  constructor(limit: number) {
+    this.limit = Math.max(1, Math.floor(limit));
+  }
+
+  /** Resolves to a release function, or to undefined when the signal aborted first (nothing is held then). */
+  async acquire(signal?: AbortSignal): Promise<(() => void) | undefined> {
+    if (signal?.aborted) return undefined;
+    if (this.held >= this.limit) {
+      const ok = await new Promise<boolean>(resolve => {
+        const wake = () => { signal?.removeEventListener('abort', onAbort); resolve(true); };
+        const onAbort = () => { const i = this.waiting.indexOf(wake); if (i >= 0) this.waiting.splice(i, 1); resolve(false); };
+        this.waiting.push(wake);
+        signal?.addEventListener('abort', onAbort, {once: true});
+      });
+      if (!ok) return undefined;
+    } else {
+      this.held++;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.waiting.shift();
+      if (next) next(); // the slot passes straight to the next waiter
+      else this.held--;
+    };
+  }
+}
