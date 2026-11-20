@@ -2,11 +2,12 @@
 
 [svg-diagram](https://github.com/cuzic/svg-diagram) の図のソース（`diagrams/*.ts`、JSON spec）を、VS Code の中で書く・検査する・プレビューするための拡張。
 
-> 開発中（0.0.x）。今は雛形だけで、機能はまだない。
+> 開発中（0.0.x）。今は CLI を見つけるところまで。
 
 ## 方針
 
-- core（`svg-diagram`）は同梱しない。案件の `node_modules/.bin/svg-diagram`、設定したパス、PATH の順に探して、CLI を子プロセスで呼ぶ。
+- core（`svg-diagram`）は同梱しない。CLI を子プロセスで呼ぶ。探す順は、設定 `svgDiagram.cliPath` → 案件の `node_modules/svg-diagram`（親のフォルダへもさかのぼる）→ `PATH`。コマンド「svg-diagram: 使う CLI の場所と版を表示」で確かめられる。
+- 案件の node_modules にあるコードを実行するので、信頼したワークスペースでだけ動く（Restricted Mode では起動しない）。
 - core の公開 API（`exports`、CLI の `--format json`、`data-node`）だけを使う。足りない機能は core 側の PR で足す。
 
 ## 起動する条件
@@ -26,13 +27,13 @@
 
 VS Code で開いて F5（「拡張を起動」）を押すと、`test/fixtures/workspace` を開いた別ウィンドウで拡張が動く。
 
-core を手元で変えながら試すときは、拡張の設定で CLI のパスを `../svg-diagram/bin/svg-diagram` に向ける（Phase 0 の 3 で入れる）。
+core を手元で変えながら試すときは、設定 `svgDiagram.cliPath` を `../svg-diagram/bin/svg-diagram` に向ける（案件のものより優先される）。
 
 ## ロードマップ
 
-1. 雛形（これ）
-2. CI
-3. core（CLI）の見つけ方
+1. 雛形（済）
+2. CI（済）
+3. core（CLI）の見つけ方（済）
 4. `check --format json` → Problems パネル
 5. ライブプレビュー
 6. JSON spec の JSON Schema（core の PR が先）

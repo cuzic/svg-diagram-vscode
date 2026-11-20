@@ -11,3 +11,9 @@ suite('activation', () => {
     assert.ok(commands.includes('svgDiagram.showOutput'));
   });
 });
+
+suite('cli', () => {
+  test('svgDiagram.showCli runs without throwing (the fixture has no CLI, so it only warns)', async () => {
+    await vscode.commands.executeCommand('svgDiagram.showCli');
+  });
+});

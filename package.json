@@ -30,8 +30,24 @@
         "command": "svgDiagram.showOutput",
         "title": "出力ログを開く",
         "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.showCli",
+        "title": "使う CLI の場所と版を表示",
+        "category": "svg-diagram"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "svg-diagram",
+      "properties": {
+        "svgDiagram.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "svg-diagram の CLI（`bin/svg-diagram`）の場所。空なら、案件の `node_modules/svg-diagram`、次に `PATH` を探す。相対パスはワークスペースのフォルダから、`~` はホーム。手元の core を試すときは `../svg-diagram/bin/svg-diagram` のように向ける。"
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node scripts/build.ts",
@@ -54,5 +70,12 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@12.18.0"
+  "packageManager": "pnpm@12.18.0",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "案件の node_modules にある svg-diagram の CLI を実行するので、信頼したワークスペースでだけ動く。"
+    },
+    "virtualWorkspaces": false
+  }
 }

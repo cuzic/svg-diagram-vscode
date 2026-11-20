@@ -1,9 +1,28 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-	"files": { "includes": ["src/**", "scripts/**", "test/**", "*.mjs"] },
-	"formatter": { "enabled": false },
-	"assist": { "actions": { "source": { "organizeImports": "off" } } },
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": [
+			"src/**",
+			"scripts/**",
+			"test/**",
+			"*.mjs"
+		]
+	},
+	"formatter": {
+		"enabled": false
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "off"
+			}
+		}
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {
@@ -13,8 +32,17 @@
 				"noUnusedVariables": "error",
 				"noUnusedFunctionParameters": "error"
 			},
-			"style": { "useImportType": "error", "noNonNullAssertion": "error", "useTemplate": "off" },
-			"suspicious": { "noExplicitAny": "error" }
+			"style": {
+				"useImportType": "error",
+				"noNonNullAssertion": "error",
+				"useTemplate": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "error"
+			},
+			"complexity": {
+				"useLiteralKeys": "off"
+			}
 		}
 	}
 }
