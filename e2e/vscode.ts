@@ -74,10 +74,15 @@ export async function launch(opts: {open: string[]; videoDir?: string; debugDir?
  * go to `debugDir`, so a CI failure shows what was on screen.
  */
 async function workbenchWindow(app: ElectronApplication, debugDir?: string): Promise<Page> {
-  await app.firstWindow({timeout: 120_000});
+  const t0 = Date.now();
+  const first = await app.firstWindow({timeout: 120_000});
+  console.log(`[e2e] first window after ${Date.now() - t0}ms: ${first.url()}`);
   for (const end = Date.now() + 120_000; Date.now() < end; await new Promise(r => setTimeout(r, 500))) {
     for (const page of app.windows()) {
-      if (await page.locator('.monaco-workbench').count().catch(() => 0)) return page;
+      if (await page.locator('.monaco-workbench').count().catch(() => 0)) {
+        console.log(`[e2e] workbench after ${Date.now() - t0}ms`);
+        return page;
+      }
     }
   }
   const pages = app.windows();

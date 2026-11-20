@@ -10,6 +10,7 @@ let vscode: VsCode;
 let win: Page;
 
 test.beforeAll(async ({}, info) => {
+  info.setTimeout(420_000); // downloading VS Code (~400 MB) on a cold CI cache, then its first start
   vscode = await launch({open: [FIXTURE, path.join(FIXTURE, 'untitled.diagram.ts')], videoDir: info.outputPath('video'), debugDir: info.outputPath('launch')});
   win = vscode.win;
 });

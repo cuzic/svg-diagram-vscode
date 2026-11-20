@@ -37,6 +37,7 @@ jobs:
         vscode: ['1.100.0', stable] # the engines minimum, and the latest
     env:
       VSCODE_VERSION: ${{ matrix.vscode }}
+      DEBUG: pw:browser # the VS Code process's own output in the log
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
