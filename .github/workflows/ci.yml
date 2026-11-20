@@ -38,6 +38,7 @@ jobs:
     env:
       VSCODE_VERSION: ${{ matrix.vscode }}
       DEBUG: pw:browser # the VS Code process's own output in the log
+      E2E_TRACE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -53,9 +54,9 @@ jobs:
           path: .vscode-test
           key: vscode-${{ runner.os }}-${{ matrix.vscode }}-${{ matrix.vscode == 'stable' && github.run_id || 'fixed' }}
           restore-keys: vscode-${{ runner.os }}-${{ matrix.vscode }}-
-      - name: e2e (Linux, on a virtual display)
+      - name: e2e (Linux, headless Ozone — no DISPLAY)
         if: runner.os == 'Linux'
-        run: xvfb-run -a --server-args="-screen 0 1280x800x24" pnpm test:e2e
+        run: env -u DISPLAY pnpm test:e2e
       - name: e2e (macOS)
         if: runner.os == 'macOS'
         run: pnpm test:e2e

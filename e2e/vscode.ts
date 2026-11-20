@@ -39,6 +39,7 @@ export async function launch(opts: {open: string[]; videoDir?: string; debugDir?
   const headless = process.platform === 'linux' && !process.env['DISPLAY'];
   const app = await _electron.launch({
     executablePath,
+    env: {...process.env, ...(process.env['E2E_TRACE'] ? {ELECTRON_ENABLE_LOGGING: '1', ELECTRON_ENABLE_STACK_DUMPING: '1'} : {})} as Record<string, string>,
     args: [
       ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=1280,800'] : []),
       ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : []),
@@ -51,6 +52,7 @@ export async function launch(opts: {open: string[]; videoDir?: string; debugDir?
       ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
       ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
       '--disable-updates',
+      ...(process.env['E2E_TRACE'] ? ['--verbose', '--log=trace'] : []),
       '--disable-experiments',
       '--skip-welcome',
       '--skip-release-notes',
