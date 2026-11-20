@@ -27,7 +27,8 @@ jobs:
 
   # The extension in a real VS Code window, clicked through with Playwright (e2e/). Screenshots of every step, a
   # Playwright trace (npx playwright show-trace trace.zip) and the HTML report are uploaded as the artifact
-  # "e2e-<os>-<version>" (also when the run passes). E2E_TRACE=1 adds VS Code's verbose log to the job log.
+  # "e2e-<os>-<version>" (also when the run passes). The trace is in the first test's folder, trace/trace.zip.
+  # A retry is allowed, but a test that only passes on retry fails the job (--fail-on-flaky-tests). E2E_TRACE=1 adds VS Code's verbose log to the job log.
   e2e:
     name: e2e (${{ matrix.os }}, VS Code ${{ matrix.vscode }})
     runs-on: ${{ matrix.os }}
@@ -48,17 +49,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: npm install --no-package-lock --no-audit --no-fund
         working-directory: test/fixtures/workspace
+      # "stable" is resolved to its version number, so the cache key changes only when a new VS Code is released
+      # (one entry per OS and version, no growth per run)
+      - name: Resolve the VS Code version
+        run: |
+          v='${{ matrix.vscode }}'
+          if [ "$v" = stable ]; then v=$(curl -fsSL https://update.code.visualstudio.com/api/releases/stable | jq -r '.[0]'); fi
+          echo "VSCODE_VERSION=$v" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: .vscode-test
-          key: vscode-${{ runner.os }}-${{ matrix.vscode }}-${{ matrix.vscode == 'stable' && github.run_id || 'fixed' }}
-          restore-keys: vscode-${{ runner.os }}-${{ matrix.vscode }}-
+          key: vscode-${{ runner.os }}-${{ env.VSCODE_VERSION }}
       - name: e2e (Linux, on a virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a --server-args="-screen 0 1280x800x24" pnpm test:e2e
+        run: xvfb-run -a --server-args="-screen 0 1280x800x24" pnpm test:e2e --fail-on-flaky-tests
       - name: e2e (macOS)
         if: runner.os == 'macOS'
-        run: pnpm test:e2e
+        run: pnpm test:e2e --fail-on-flaky-tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:

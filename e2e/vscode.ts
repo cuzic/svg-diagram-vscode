@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {type ChildProcess, spawn} from 'node:child_process';
-import net from 'node:net';
 import {type Browser, chromium, type FrameLocator, type Page} from '@playwright/test';
 import {downloadAndUnzipVSCode} from '@vscode/test-electron';
 
@@ -44,9 +43,9 @@ export async function launch(opts: {open: string[]; traceDir?: string; debugDir?
   fs.mkdirSync(path.join(tmp, 'user', 'User'), {recursive: true});
   fs.writeFileSync(path.join(tmp, 'user', 'User', 'settings.json'), JSON.stringify(SETTINGS, null, 2));
   const headless = process.platform === 'linux' && !process.env['DISPLAY'];
-  const port = await freePort();
   const args = [
-    `--remote-debugging-port=${port}`,
+    // port 0: Chromium picks a free one and prints it (no race with another process taking a port we picked)
+    '--remote-debugging-port=0',
     ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=1280,800'] : []),
     ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : []),
     `--user-data-dir=${path.join(tmp, 'user')}`,
@@ -68,13 +67,18 @@ export async function launch(opts: {open: string[]; traceDir?: string; debugDir?
   const child = spawn(executablePath, args, {env: {...process.env, VSCODE_CLI: undefined, ELECTRON_RUN_AS_NODE: undefined}, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32'});
   const log: string[] = [];
   for (const stream of [child.stdout, child.stderr]) stream?.on('data', (b: Buffer) => { log.push(b.toString()); if (process.env['E2E_TRACE']) process.stderr.write(b); });
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
 
-  const kill = () => {
-    if (child.exitCode !== null || !child.pid) return;
-    try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+  /** Kills the whole process group (main, renderer, extension host, the CLI it runs), waits (≤5 s) for it, then removes the profile. */
+  const stop = async () => {
+    if (child.exitCode === null && child.pid) {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+      await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
+    }
+    try { fs.rmSync(tmp, {recursive: true, force: true, maxRetries: 5, retryDelay: 200}); } catch { /* a straggler still writing: left in the temp dir */ }
   };
   try {
-    const browser = await connect(port, child);
+    const browser = await connect(child, log);
     const win = await workbenchWindow(browser, opts.debugDir);
     const context = win.context();
     if (opts.traceDir) await context.tracing.start({screenshots: true, snapshots: true});
@@ -85,38 +89,29 @@ export async function launch(opts: {open: string[]; traceDir?: string; debugDir?
       async close() {
         if (opts.traceDir) await context.tracing.stop({path: path.join(opts.traceDir, 'trace.zip')}).catch(() => undefined);
         await browser.close().catch(() => undefined);
-        kill();
-        fs.rmSync(tmp, {recursive: true, force: true});
+        await stop();
       },
     };
   } catch (e) {
     if (opts.debugDir) { fs.mkdirSync(opts.debugDir, {recursive: true}); fs.writeFileSync(path.join(opts.debugDir, 'vscode.log'), log.join('')); }
-    kill();
+    await stop();
     throw e;
   }
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const {port} = server.address() as net.AddressInfo;
-      server.close(() => resolve(port));
-    });
-    server.on('error', reject);
-  });
-}
-
-/** Waits for the DevTools endpoint, then connects. */
-async function connect(port: number, child: ChildProcess): Promise<Browser> {
+/** Waits for Chromium's "DevTools listening on ws://127.0.0.1:<port>/..." line, then connects to that port. */
+async function connect(child: ChildProcess, log: string[]): Promise<Browser> {
   const end = Date.now() + 120_000;
   for (;;) {
     if (child.exitCode !== null) throw new Error(`VS Code exited (code ${child.exitCode}) before its DevTools port opened`);
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (res.ok) return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    } catch { /* not up yet */ }
-    if (Date.now() > end) throw new Error(`VS Code's DevTools port ${port} did not open within 120s`);
+    const port = log.join('').match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//)?.[1];
+    if (port) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/json/version`, {signal: AbortSignal.timeout(5000)});
+        if (res.ok) return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+      } catch { /* not answering yet */ }
+    }
+    if (Date.now() > end) throw new Error('VS Code did not open its DevTools port within 120s');
     await new Promise(r => setTimeout(r, 300));
   }
 }
@@ -154,8 +149,7 @@ export async function runCommand(win: Page, title: string): Promise<void> {
   await input.waitFor({state: 'visible'});
   await input.fill(`>${title}`);
   const row = win.locator('.quick-input-widget .monaco-list-row', {hasText: title}).first();
-  await row.waitFor({state: 'visible'});
-  await win.keyboard.press('Enter');
+  await row.click(); // the row that matched, not whichever one Enter would pick (a recently used entry)
 }
 
 /**
@@ -167,8 +161,7 @@ export async function openFile(win: Page, name: string): Promise<void> {
   await runCommand(win, 'Go to File...');
   const input = win.locator('.quick-input-widget input');
   await input.fill(name);
-  await win.locator('.quick-input-widget .monaco-list-row', {hasText: name}).first().waitFor({state: 'visible'});
-  await win.keyboard.press('Enter');
+  await win.locator('.quick-input-widget .monaco-list-row', {hasText: name}).first().click();
   await activeTab(win, name).waitFor({state: 'visible'});
 }
 

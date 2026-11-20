@@ -77,6 +77,7 @@
 - CI は {Ubuntu（xvfb）, macOS} × {VS Code 1.100.0（engines の下限）, stable} で走らせ、スクリーンショット・trace・HTML レポートを artifact「e2e-<os>-<版>」に上げる（通ったときも）。
 - 手元の Linux で画面がないときは Chromium の headless（`--ozone-platform=headless`）で動く。`VSCODE_VERSION=1.100.0 pnpm test:e2e` で版を選べる。
 - 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.5.0）。
+- テストの実行プロセスを kill -9 したときは VS Code が残る（別のプロセスグループで起動するため）: `pkill -f svgd-e2e-`。
 
 VS Code で開いて F5（「拡張を起動」）を押すと、`test/fixtures/workspace` を開いた別ウィンドウで拡張が動く。
 
