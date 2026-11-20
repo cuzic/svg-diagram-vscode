@@ -1,0 +1,58 @@
+{
+  "name": "svg-diagram-vscode",
+  "displayName": "svg-diagram",
+  "description": "svg-diagram の図のソースを VS Code で書く・検査する・プレビューする",
+  "version": "0.0.1",
+  "publisher": "cuzic",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cuzic/svg-diagram-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0",
+    "node": ">=22.18"
+  },
+  "categories": [
+    "Visualization",
+    "Linters"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "workspaceContains:node_modules/svg-diagram/package.json",
+    "workspaceContains:**/.svg-diagram.json"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "svgDiagram.showOutput",
+        "title": "出力ログを開く",
+        "category": "svg-diagram"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "watch": "node scripts/build.ts --watch",
+    "typecheck": "tsc -p .",
+    "lint": "biome lint .",
+    "test": "node --test \"test/unit/*.test.ts\"",
+    "test:integration": "node scripts/build.ts --tests && vscode-test",
+    "package": "pnpm build --production && vsce package --no-dependencies",
+    "vscode:prepublish": "pnpm build --production"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.8",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.18.0",
+    "@types/vscode": "~1.100.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.1.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@12.18.0"
+}
