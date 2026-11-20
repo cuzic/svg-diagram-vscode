@@ -25,6 +25,7 @@
     "workspaceContains:**/.svg-diagram.json",
     "onLanguage:typescript",
     "onLanguage:javascript",
+    "onFileSystem:svg-diagram-schema",
     "onWebviewPanel:svgDiagram.preview"
   ],
   "contributes": {
@@ -102,6 +103,12 @@
           "default": true,
           "scope": "resource",
           "markdownDescription": "図のソースを開いたとき（名前を変えたとき・拡張が起動したときも）に検査する。エディタの外で変わっていることがあるので、開くたびに検査し直す。"
+        },
+        "svgDiagram.jsonSchemas.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "markdownDescription": "`.svg-diagram.json`・`site.json`・デッキ（`deck.json`・`deck-*.json`・`*.deck.json`）を、案件の svg-diagram（0.8.0 以降）の JSON Schema で補完・検査する。案件に svg-diagram が無ければ何も検査しない。同じ名前の別のファイルで誤りが出るときは切る。先頭に `\"$schema\"` を書いたファイルは、この設定によらずそれに従う。"
         }
       }
     },
@@ -170,6 +177,28 @@
             "description": "続けて渡す引数"
           }
         }
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          ".svg-diagram.json"
+        ],
+        "url": "svg-diagram-schema://schema/config.schema.json"
+      },
+      {
+        "fileMatch": [
+          "site.json"
+        ],
+        "url": "svg-diagram-schema://schema/site.schema.json"
+      },
+      {
+        "fileMatch": [
+          "deck.json",
+          "deck-*.json",
+          "*.deck.json"
+        ],
+        "url": "svg-diagram-schema://schema/deck.schema.json"
       }
     ]
   },

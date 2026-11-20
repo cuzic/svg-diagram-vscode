@@ -19,3 +19,11 @@ test('every command is in the svg-diagram category and has a title', () => {
     assert.ok(c.title, c.command);
   }
 });
+
+test('jsonValidation names only schemas the extension serves, and the scheme activates the extension', async () => {
+  const {SCHEMA_FILES, schemaUri, SCHEMA_SCHEME} = await import('../../src/schemas.ts');
+  const served = new Set(SCHEMA_FILES.map(schemaUri));
+  for (const v of manifest.contributes.jsonValidation) assert.ok(served.has(v.url), v.url);
+  assert.ok(manifest.activationEvents.includes(`onFileSystem:${SCHEMA_SCHEME}`));
+  assert.ok(manifest.contributes.configuration.properties['svgDiagram.jsonSchemas.enabled']);
+});

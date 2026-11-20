@@ -19,7 +19,7 @@ suite('cli', () => {
 });
 
 suite('check → Problems', () => {
-  // test/fixtures/workspace has svg-diagram 0.5.0 in node_modules (CI: npm install there before the run)
+  // test/fixtures/workspace has svg-diagram 0.8.0 (the GitHub release tag) in node_modules (CI: npm install there before the run)
   const folder = () => vscode.workspace.workspaceFolders?.[0]?.uri;
 
   async function diagnosticsOf(name: string, timeoutMs = 60_000): Promise<vscode.Diagnostic[]> {
@@ -41,11 +41,12 @@ suite('check → Problems', () => {
     assert.equal(d?.severity, vscode.DiagnosticSeverity.Warning);
   });
 
-  test('a source that throws is a build-error on the line that threw', async () => {
+  test('a source that throws is a build-error', async () => {
     const [d] = await diagnosticsOf('broken.diagram.ts');
     assert.equal(d?.code, 'build-error');
     assert.equal(d?.severity, vscode.DiagnosticSeverity.Error);
-    assert.equal(d?.range.start.line, 4); // `throw new Error(...)` is line 5
+    // core 0.8.0 reports it in its JSON, without a line (0.5.0 crashed, and the line came from the stack): the first line
+    assert.equal(d?.range.start.line, 0);
     assert.match(d?.message ?? '', /わざと壊した図/);
   });
 });
@@ -104,5 +105,39 @@ suite('shared parts', () => {
     assert.deepEqual(vscode.languages.getDiagnostics(uri).filter(d => d.source === 'svg-diagram'), []);
     const api = vscode.extensions.getExtension<{testing: {previewMessage(): {file?: string} | undefined}}>('cuzic.svg-diagram-vscode')?.exports;
     assert.notEqual(api?.testing.previewMessage()?.file, uri.fsPath);
+  });
+});
+
+suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => {
+  const uriOf = (name: string) => {
+    const base = vscode.workspace.workspaceFolders?.[0]?.uri;
+    assert.ok(base);
+    return vscode.Uri.joinPath(base, name);
+  };
+  // the JSON language server's diagnostics have no `source`
+  async function jsonDiagnostics(name: string, timeoutMs = 15_000): Promise<vscode.Diagnostic[]> {
+    const uri = uriOf(name);
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+    for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
+      const found = vscode.languages.getDiagnostics(uri).filter(d => d.source !== 'svg-diagram');
+      if (found.length) return found;
+    }
+    assert.fail(`no json diagnostics for ${name} within ${timeoutMs}ms`);
+  }
+
+  test('site.json is checked against site.schema.json', async () => {
+    const found = await jsonDiagnostics('json/site.json');
+    assert.ok(found.some(d => /colour/.test(d.message) && d.range.start.line === 2), found.map(d => d.message).join(' / '));
+  });
+
+  test('a deck: the figure path message, and every part type is offered (spec.schema.json through the relative $ref)', async () => {
+    const found = await jsonDiagnostics('json/deck.json');
+    assert.ok(found.some(d => /ends in \.ts or \.json/.test(d.message) && d.range.start.line === 3), found.map(d => d.message).join(' / '));
+    const doc = await vscode.workspace.openTextDocument(uriOf('json/deck.json'));
+    const at = doc.lineAt(2).text.indexOf('"type": "') + '"type": "'.length;
+    const list = await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', doc.uri, new vscode.Position(2, at));
+    const labels = list.items.map(i => (typeof i.label === 'string' ? i.label : i.label.label).replace(/"/g, ''));
+    for (const t of ['chevron', 'flowchart', 'gantt']) assert.ok(labels.includes(t), `${t} not offered: ${labels.slice(0, 10).join(', ')}`);
+    assert.ok(labels.length >= 60, `only ${labels.length} part types`);
   });
 });

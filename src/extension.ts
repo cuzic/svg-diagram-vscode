@@ -6,6 +6,8 @@ import {isDiagramSource} from './check.ts';
 import {describeCli, type ResolveResult, type ResolvedCli, resolveCli} from './cli.ts';
 import {Checker, findDiagramSources} from './diagnostics.ts';
 import {isSource, PREVIEW_VIEW_TYPE, PreviewManager} from './preview.ts';
+import {SchemaProvider} from './schema-provider.ts';
+import type {SchemaCandidate} from './schemas.ts';
 import {detectPackageManager, readSetupState, setupCommand} from './setup.ts';
 import {showMenu, Status} from './status.ts';
 import {SvgDiagramTaskProvider, TASK_TYPE} from './tasks.ts';
@@ -30,6 +32,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const setSourceContext = (editor = vscode.window.activeTextEditor) =>
     void vscode.commands.executeCommand('setContext', 'svgDiagram.isSource', !!editor && isSource(editor.document));
   const tasks = new SvgDiagramTaskProvider(peekCli);
+  const schemas = new SchemaProvider({candidates: schemaCandidates, log});
   const status = new Status({
     peekCli,
     isSourceActive: () => !!vscode.window.activeTextEditor && isSource(vscode.window.activeTextEditor.document),
@@ -45,13 +48,14 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     checker,
     preview,
     status,
+    schemas,
     vscode.window.onDidChangeActiveTextEditor(e => { setSourceContext(e); status.refresh(); }),
     vscode.workspace.onDidSaveTextDocument(doc => { if (doc === vscode.window.activeTextEditor?.document) { setSourceContext(); status.refresh(); } }),
     vscode.commands.registerCommand('svgDiagram.openPreview', (uri?: vscode.Uri) => openPreview(preview, uri, vscode.ViewColumn.Beside)),
     vscode.commands.registerCommand('svgDiagram.showPreview', (uri?: vscode.Uri) => openPreview(preview, uri, vscode.ViewColumn.Active)),
     checker.onBusyChange(busy => status.setBusy(busy)),
     vscode.window.tabGroups.onDidChangeTabs(() => status.refresh()),
-    vscode.window.onDidChangeWindowState(e => { if (e.focused) status.refresh(); }), // back from a terminal where svg-diagram was installed
+    vscode.window.onDidChangeWindowState(e => { if (e.focused) { status.refresh(); schemas.refresh(); } }), // back from a terminal where svg-diagram was installed
     vscode.tasks.registerTaskProvider(TASK_TYPE, tasks),
     vscode.commands.registerCommand('svgDiagram.menu', () => showMenu(!!peekCli(vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri))),
     vscode.commands.registerCommand('svgDiagram.typecheck', async () => {
@@ -90,8 +94,9 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       })),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('svgDiagram.cliPath')) { warned.clear(); logCliForAllFolders(); status.refresh(); }
+      if (e.affectsConfiguration('svgDiagram.cliPath') || e.affectsConfiguration('svgDiagram.jsonSchemas.enabled')) schemas.refresh();
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => logCliForAllFolders()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => { logCliForAllFolders(); schemas.refresh(); }),
   );
   log.info(`svg-diagram 拡張 ${context.extension.packageJSON.version} を起動した`);
   if (process.platform === 'win32') log.warn(WINDOWS_UNSUPPORTED);
@@ -118,6 +123,17 @@ async function isSourceFile(uri: vscode.Uri): Promise<boolean> {
 
 export function deactivate(): void {
   output = undefined;
+}
+
+/**
+ * Where the JSON Schemas may come from, best first: the project of the active file (a package below the workspace
+ * folder in a monorepo), then each workspace folder. A schema request does not say which file it is for.
+ */
+function schemaCandidates(): SchemaCandidate[] {
+  if (process.platform === 'win32') return [];
+  const active = vscode.window.activeTextEditor?.document.uri;
+  const scopes = [...(active?.scheme === 'file' ? [active] : []), ...(vscode.workspace.workspaceFolders ?? []).map(f => f.uri)];
+  return scopes.map(scope => ({cli: lookup(scope).cli, folder: vscode.workspace.getWorkspaceFolder(scope)?.uri.fsPath}));
 }
 
 /**
