@@ -10,7 +10,7 @@ let vscode: VsCode;
 let win: Page;
 
 test.beforeAll(async ({}, info) => {
-  vscode = await launch({open: [FIXTURE, path.join(FIXTURE, 'untitled.diagram.ts')], videoDir: info.outputPath('video')});
+  vscode = await launch({open: [FIXTURE, path.join(FIXTURE, 'untitled.diagram.ts')], videoDir: info.outputPath('video'), debugDir: info.outputPath('launch')});
   win = vscode.win;
 });
 

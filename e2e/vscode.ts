@@ -30,7 +30,7 @@ export interface VsCode {
   close(): Promise<void>;
 }
 
-export async function launch(opts: {open: string[]; videoDir?: string}): Promise<VsCode> {
+export async function launch(opts: {open: string[]; videoDir?: string; debugDir?: string}): Promise<VsCode> {
   const version = process.env['VSCODE_VERSION'] ?? 'stable';
   const executablePath = await downloadAndUnzipVSCode(version);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'svgd-e2e-'));
@@ -54,8 +54,7 @@ export async function launch(opts: {open: string[]; videoDir?: string}): Promise
     ...(opts.videoDir ? {recordVideo: {dir: opts.videoDir, size: {width: 1280, height: 800}}} : {}),
     timeout: 120_000,
   });
-  const win = await app.firstWindow();
-  await win.waitForSelector('.monaco-workbench', {timeout: 120_000});
+  const win = await workbenchWindow(app, opts.debugDir);
   // a fixed window size, so the editor, the preview beside it and the panel all have room (and screenshots compare)
   await app.evaluate(({BrowserWindow}) => { for (const w of BrowserWindow.getAllWindows()) { w.unmaximize(); w.setContentSize(1280, 800); } });
   await win.waitForFunction('window.innerWidth >= 1200', undefined, {timeout: 10_000}).catch(() => undefined);
@@ -67,6 +66,28 @@ export async function launch(opts: {open: string[]; videoDir?: string}): Promise
       fs.rmSync(tmp, {recursive: true, force: true});
     },
   };
+}
+
+/**
+ * The window with the workbench. Electron's first window is not always it (a splash / shared window can come first),
+ * so every window is looked at until one has `.monaco-workbench`. When none does, each window's URL and a screenshot
+ * go to `debugDir`, so a CI failure shows what was on screen.
+ */
+async function workbenchWindow(app: ElectronApplication, debugDir?: string): Promise<Page> {
+  await app.firstWindow({timeout: 120_000});
+  for (const end = Date.now() + 120_000; Date.now() < end; await new Promise(r => setTimeout(r, 500))) {
+    for (const page of app.windows()) {
+      if (await page.locator('.monaco-workbench').count().catch(() => 0)) return page;
+    }
+  }
+  const pages = app.windows();
+  const lines = pages.map((p, i) => `${i}: ${p.url()}`);
+  if (debugDir) {
+    fs.mkdirSync(debugDir, {recursive: true});
+    fs.writeFileSync(path.join(debugDir, 'windows.txt'), lines.join('\n') + '\n');
+    for (const [i, p] of pages.entries()) await p.screenshot({path: path.join(debugDir, `window-${i}.png`)}).catch(() => undefined);
+  }
+  throw new Error(`no VS Code window with the workbench after 120s; windows:\n${lines.join('\n')}`);
 }
 
 /** Runs a command by its title from the command palette (F1 works on every platform). */
