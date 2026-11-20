@@ -24,3 +24,45 @@ jobs:
       # VS Code itself is downloaded by @vscode/test-electron and needs a display
       - run: xvfb-run -a pnpm test:integration
       - run: pnpm exec vsce package --no-dependencies
+
+  # The extension in a real VS Code window, clicked through with Playwright (e2e/). Screenshots of every step, the
+  # video and the HTML report are uploaded as the artifact "e2e-<os>-<version>" (also when the run passes).
+  e2e:
+    name: e2e (${{ matrix.os }}, VS Code ${{ matrix.vscode }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        vscode: ['1.100.0', stable] # the engines minimum, and the latest
+    env:
+      VSCODE_VERSION: ${{ matrix.vscode }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npm install --no-package-lock --no-audit --no-fund
+        working-directory: test/fixtures/workspace
+      - uses: actions/cache@v4
+        with:
+          path: .vscode-test
+          key: vscode-${{ runner.os }}-${{ matrix.vscode }}-${{ matrix.vscode == 'stable' && github.run_id || 'fixed' }}
+          restore-keys: vscode-${{ runner.os }}-${{ matrix.vscode }}-
+      - name: e2e (Linux, on a virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a --server-args="-screen 0 1280x800x24" pnpm test:e2e
+      - name: e2e (macOS)
+        if: runner.os == 'macOS'
+        run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ matrix.os }}-${{ matrix.vscode }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14

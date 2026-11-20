@@ -8,7 +8,7 @@ test('buildArgs: scratch output, no lint', () => {
 
 test('buildErrorText: the ✗ lines of a newer core', () => {
   const stderr = '(node:1) [DEP0205] DeprecationWarning: x\n✗ /p/a.ts: diagram({theme}) must be one of 1, 2\n  詳しくは README\n';
-  assert.equal(buildErrorText('/p/a.ts', stderr), '/p/a.ts: diagram({theme}) must be one of 1, 2');
+  assert.equal(buildErrorText('/p/a.ts', stderr), 'diagram({theme}) must be one of 1, 2'); // the title names the file
 });
 
 test('buildErrorText: a 0.5.0 crash → the Error line and the line of the source', () => {

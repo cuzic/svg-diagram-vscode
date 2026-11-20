@@ -12,7 +12,8 @@ export function buildArgs(file: string, out: string): string[] {
  */
 export function buildErrorText(file: string, stderr: string): string {
   const lines = stderr.split(/\r?\n/).filter(s => s.trim() && !/DeprecationWarning|--trace-deprecation|^Node\.js v/.test(s));
-  const failed = lines.filter(s => /^\s*✗ /.test(s)).map(s => s.trim().replace(/^✗ /, ''));
+  // `✗ <source>: <message>`: the title already names the source, so the path goes
+  const failed = lines.filter(s => /^\s*✗ /.test(s)).map(s => s.trim().replace(/^✗ /, '')).map(s => (s.startsWith(`${file}: `) ? s.slice(file.length + 2) : s));
   if (failed.length) return failed.join('\n');
   const crash = crashFinding(file, lines.join('\n'));
   if (crash.message !== 'check が JSON を出さずに失敗した') return crash.line ? `${crash.message}（${crash.line} 行目）` : crash.message;
@@ -59,6 +60,7 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
   .stage.bg-checker { background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
   .stage svg { display: block; max-width: none; }
   .stage.fit svg { width: 100% !important; height: auto !important; }
+  .stage:not(:has(svg)) { background: none; padding: 0; }
   .empty { padding: 16px; opacity: .7; }
 </style>
 </head>
@@ -105,9 +107,11 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
     $('title').textContent = msg.title;
     // the drawing on the stage is of another source: never show it under this one's title
     if (msg.kind !== 'svg' && shownFile !== msg.file) { stage.innerHTML = ''; natural = null; shownFile = null; }
+    // the banner is about the file it was sent for: switching to another file takes it down
+    if (msg.kind === 'building' && error.dataset.file !== msg.file) error.classList.remove('shown');
     if (msg.kind === 'building') { state.textContent = '描いている…'; state.classList.remove('stale'); return; }
     if (msg.kind === 'error') {
-      error.textContent = msg.message; error.classList.add('shown');
+      error.textContent = msg.message; error.dataset.file = msg.file; error.classList.add('shown');
       const has = !!stage.querySelector('svg');
       state.textContent = has ? '古い図（今のソースは描けない）' : '描けない'; state.classList.add('stale');
       return;

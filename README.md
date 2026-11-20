@@ -67,7 +67,16 @@
     pnpm typecheck && pnpm lint && pnpm test
     (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.5.0
     pnpm test:integration   # 本物の VS Code を落として動かす（画面が要る。CI では xvfb-run）
+    pnpm test:e2e       # 本物の VS Code の画面を Playwright で操作する（下）
     pnpm package        # .vsix を作る
+
+### 画面の E2E テスト（`e2e/`）
+
+`@vscode/test-electron` で落とした VS Code を Playwright で起動し、人と同じようにコマンドパレット・クリックで操作する: ステータスバーの版、「問題」パネルの所見、エディタのプレビューボタン、プレビューの Webview に SVG が描かれること、拡大・背景のボタン、描けない図の理由、ステータスバーのメニュー、共通部品では何も出ないこと。各手順のスクリーンショットと動画を `test-results/` に残す。
+
+- CI は {Ubuntu（xvfb）, macOS} × {VS Code 1.100.0（engines の下限）, stable} で走らせ、スクリーンショット・動画・HTML レポートを artifact「e2e-<os>-<版>」に上げる（通ったときも）。
+- 手元の Linux で画面がないときは Chromium の headless（`--ozone-platform=headless`）で動く。`VSCODE_VERSION=1.100.0 pnpm test:e2e` で版を選べる。
+- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.5.0）。
 
 VS Code で開いて F5（「拡張を起動」）を押すと、`test/fixtures/workspace` を開いた別ウィンドウで拡張が動く。
 

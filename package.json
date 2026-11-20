@@ -181,10 +181,12 @@
     "test": "node --test \"test/unit/*.test.ts\"",
     "test:integration": "node scripts/build.ts --tests && vscode-test",
     "package": "pnpm build --production && vsce package --no-dependencies",
-    "vscode:prepublish": "pnpm build --production"
+    "vscode:prepublish": "pnpm build --production",
+    "test:e2e": "pnpm build && playwright test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
+    "@playwright/test": "1.65.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.18.0",
     "@types/vscode": "~1.100.0",

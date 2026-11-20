@@ -7,6 +7,8 @@
 	},
 	"files": {
 		"includes": [
+			"playwright.config.ts",
+			"e2e/**",
 			"src/**",
 			"scripts/**",
 			"test/**",
@@ -45,5 +47,19 @@
 				"useLiteralKeys": "off"
 			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": [
+				"e2e/**"
+			],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noEmptyPattern": "off"
+					}
+				}
+			}
+		}
+	]
 }
