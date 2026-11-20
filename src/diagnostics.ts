@@ -42,7 +42,9 @@ export class Checker implements vscode.Disposable {
         if (isSource(doc)) { if (setting<boolean>(doc.uri, 'check.onSave')) void this.check([doc.uri]); return; }
         this.collection.delete(doc.uri); // no longer a diagram source (the import or the default export went away)
         // a shared part (or the project settings): the open diagrams of the same folder may import it
-        if (/\.(m?ts|m?js)$/.test(doc.fileName) || path.basename(doc.fileName) === '.svg-diagram.json') this.recheckOpen(vscode.workspace.getWorkspaceFolder(doc.uri), 'check.onSave');
+        const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
+        const relevant = /\.(m?ts|m?js)$/.test(doc.fileName) || path.basename(doc.fileName) === '.svg-diagram.json';
+        if (folder && relevant && !doc.uri.fsPath.split(path.sep).includes('node_modules')) this.recheckOpen(folder, 'check.onSave');
       }),
       // re-checked on every open: the file may have changed outside the editor (a git checkout) since the last findings
       vscode.workspace.onDidOpenTextDocument(doc => { if (setting<boolean>(doc.uri, 'check.onOpen') && isSource(doc)) void this.check([doc.uri]); }),
@@ -54,12 +56,12 @@ export class Checker implements vscode.Disposable {
           if (doc && isSource(doc) && setting<boolean>(newUri, 'check.onOpen')) void this.check([newUri]);
         }
       }),
-      vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('svgDiagram.check.enabled')) this.recheckOpen(); }),
+      vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('svgDiagram.check.enabled')) this.recheckOpen(undefined, 'check.enabled'); }),
     );
   }
 
   /** Checks the open diagram sources (activation, settings change; with a folder: a shared part of it was saved). */
-  recheckOpen(folder?: vscode.WorkspaceFolder, when: 'check.onOpen' | 'check.onSave' = 'check.onOpen'): void {
+  recheckOpen(folder?: vscode.WorkspaceFolder, when: 'check.onOpen' | 'check.onSave' | 'check.enabled' = 'check.onOpen'): void {
     const docs = vscode.workspace.textDocuments.filter(d => isSource(d) && (!folder || vscode.workspace.getWorkspaceFolder(d.uri)?.uri.toString() === folder.uri.toString()));
     for (const d of docs) if (!setting<boolean>(d.uri, 'check.enabled')) this.collection.delete(d.uri);
     const uris = docs.filter(d => setting<boolean>(d.uri, when)).map(d => d.uri);
@@ -108,7 +110,8 @@ export class Checker implements vscode.Disposable {
     const files = uris.map(u => u.fsPath);
     const {log} = this.deps;
     this.setBusy(+1);
-    const release = await this.slots.acquire(signal);
+    // one file, not part of a cancellable workspace check: a save or an open, which the user is waiting for
+    const release = await this.slots.acquire(signal, uris.length === 1 && !cancel);
     try {
       if (!release) return;
       log.debug(`${cli.bin} ${checkArgs(files).join(' ')}（cwd: ${cwd}）`);
@@ -201,12 +204,13 @@ async function textOf(uri: vscode.Uri): Promise<string | undefined> {
  */
 export async function findDiagramSources(token?: vscode.CancellationToken): Promise<vscode.Uri[]> {
   const excluded = Object.entries(vscode.workspace.getConfiguration('files').get<Record<string, unknown>>('exclude') ?? {})
-    .filter(([glob, on]) => on === true && !/[{}]/.test(glob)) // nested braces are not a glob findFiles reads
+    .filter(([glob, on]) => on === true && !/[{}]/.test(glob)) // nested braces are not a glob findFiles reads (README says so)
     .map(([glob]) => glob);
   const exclude = `{${['**/node_modules/**', ...excluded].join(',')}}`;
   const candidates = await vscode.workspace.findFiles('**/*.{ts,mts,js,mjs}', exclude, undefined, token);
   const sources: vscode.Uri[] = [];
   for (const uri of candidates) {
+    if (token?.isCancellationRequested) return [];
     const text = await textOf(uri);
     if (text !== undefined && isDiagramSource(uri.fsPath, text)) sources.push(uri);
   }

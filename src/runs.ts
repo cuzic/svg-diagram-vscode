@@ -55,14 +55,18 @@ export class Semaphore {
     this.limit = Math.max(1, Math.floor(limit));
   }
 
-  /** Resolves to a release function, or to undefined when the signal aborted first (nothing is held then). */
-  async acquire(signal?: AbortSignal): Promise<(() => void) | undefined> {
+  /**
+   * Resolves to a release function, or to undefined when the signal aborted first (nothing is held then).
+   * `urgent` waiters go to the front (a save should not wait behind a whole workspace check).
+   */
+  async acquire(signal?: AbortSignal, urgent = false): Promise<(() => void) | undefined> {
     if (signal?.aborted) return undefined;
     if (this.held >= this.limit) {
       const ok = await new Promise<boolean>(resolve => {
         const wake = () => { signal?.removeEventListener('abort', onAbort); resolve(true); };
         const onAbort = () => { const i = this.waiting.indexOf(wake); if (i >= 0) this.waiting.splice(i, 1); resolve(false); };
-        this.waiting.push(wake);
+        if (urgent) this.waiting.unshift(wake);
+        else this.waiting.push(wake);
         signal?.addEventListener('abort', onAbort, {once: true});
       });
       if (!ok) return undefined;

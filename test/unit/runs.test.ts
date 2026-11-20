@@ -62,3 +62,14 @@ test('Semaphore: at most `limit` at once, in order; an aborted waiter leaves the
   const again = [await sem.acquire(), await sem.acquire()];
   assert.equal(again.every(Boolean), true);
 });
+
+test('Semaphore: an urgent waiter goes before the queued ones', async () => {
+  const sem = new Semaphore(1);
+  const r = await sem.acquire();
+  const order: string[] = [];
+  const a = sem.acquire().then(rel => { order.push('batch'); rel?.(); });
+  const b = sem.acquire(undefined, true).then(rel => { order.push('save'); rel?.(); });
+  r?.();
+  await Promise.all([a, b]);
+  assert.deepEqual(order, ['save', 'batch']);
+});

@@ -97,10 +97,21 @@ export function findingMessage(f: Finding): string {
  */
 export function isDiagramSource(fileName: string, text: string): boolean {
   if (!/\.(m?ts|m?js)$/.test(fileName) || /\.d\.ts$/.test(fileName)) return false;
-  const code = withoutComments(text);
-  const importsDsl = /\bfrom\s+['"]svg-diagram['"]|\bimport\(\s*['"]svg-diagram['"]\s*\)/.test(code);
-  // `export default ...`, `export {define as default}`, `export {default} from './x.ts'`
-  return importsDsl && /\bexport\s+default\b|\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(code);
+  // Comments are stripped without a tokenizer, so a `/*` inside a string ('icons/*.svg') can swallow real code.
+  // Either reading is enough: the stripped text, or the raw text with the statements at the start of a line.
+  return looksLikeSource(withoutComments(text), false) || looksLikeSource(text, true);
+}
+
+function looksLikeSource(code: string, lineStart: boolean): boolean {
+  const at = lineStart ? '^\\s*' : '\\b';
+  const importsDsl = new RegExp(`${at}import\\b[^;]*?\\bfrom\\s+['"]svg-diagram['"]|\\bimport\\(\\s*['"]svg-diagram['"]\\s*\\)`, 'm').test(code);
+  if (!importsDsl) return false;
+  if (new RegExp(`${at}export\\s+default\\b`, 'm').test(code)) return true;
+  // `export {define as default}` / `export {default} from './x.ts'`; not `export {default as box} from` (a barrel of parts)
+  for (const m of code.matchAll(new RegExp(`${at}export\\s*\\{([^}]*)\\}`, 'gm'))) {
+    if ((m[1] ?? '').split(',').map(x => x.trim()).some(x => x === 'default' || /\bas\s+default$/.test(x))) return true;
+  }
+  return false;
 }
 
 /** Drops block comments and line comments (a `//` at the start of a line or after a space: not `https://` in a string). */

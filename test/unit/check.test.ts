@@ -79,6 +79,17 @@ test('isDiagramSource: a default export re-exported from another module counts; 
   assert.ok(isDiagramSource('a.ts', "import {box} from 'svg-diagram';\nconst url = 'https://example.com'; export default () => box({title: url});"));
 });
 
+test('isDiagramSource: a `/*` inside a string does not hide the export (round 3, m1)', () => {
+  const src = "import {diagram, icon} from 'svg-diagram';\nconst icons = 'icons/*.svg';\nexport default function define() { /** note */ return diagram({}); }";
+  assert.ok(isDiagramSource('a.ts', src));
+  assert.ok(isDiagramSource('a.ts', "import {box} from 'svg-diagram';\nconst u = 'https://x/*y';\n/* c */\nexport default () => box({title: u});"));
+});
+
+test('isDiagramSource: a barrel re-exporting a default under another name is not a diagram (round 3, m2)', () => {
+  assert.ok(!isDiagramSource('index.ts', "import {box} from 'svg-diagram';\nexport {default as step} from './step.ts';"));
+  assert.ok(isDiagramSource('a.ts', "import {box} from 'svg-diagram';\nexport {x, define as default};"));
+});
+
 test('isDiagramSource: a module of shared parts (no default export) is not a diagram', () => {
   assert.ok(!isDiagramSource('parts.ts', "import {box} from 'svg-diagram';\nexport const step = (t: string) => box({title: t});"));
 });
