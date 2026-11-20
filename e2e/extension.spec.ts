@@ -1,5 +1,5 @@
 // End-to-end: the extension in a real VS Code window, clicked through like a user would.
-// Each step leaves a screenshot in the report (CI uploads it with the video).
+// Each step leaves a screenshot in the report (CI uploads them with a Playwright trace).
 import path from 'node:path';
 import {expect, type Page, test, type TestInfo} from '@playwright/test';
 import {activeTab, FIXTURE, launch, openFile, previewFrame, runCommand, type VsCode} from './vscode.ts';
