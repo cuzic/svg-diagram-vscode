@@ -20,10 +20,15 @@ test('every command is in the svg-diagram category and has a title', () => {
   }
 });
 
-test('jsonValidation names only schemas the extension serves, and the scheme activates the extension', async () => {
-  const {SCHEMA_FILES, schemaUri, SCHEMA_SCHEME} = await import('../../src/schemas.ts');
+test('jsonValidation matches SCHEMA_TARGETS, names only schemas the extension serves, and the scheme activates it', async () => {
+  const {SCHEMA_FILES, SCHEMA_TARGETS, schemaUri, SCHEMA_SCHEME} = await import('../../src/schemas.ts');
   const served = new Set(SCHEMA_FILES.map(schemaUri));
-  for (const v of manifest.contributes.jsonValidation) assert.ok(served.has(v.url), v.url);
+  const fromManifest = manifest.contributes.jsonValidation.flatMap((v: {fileMatch: string[]; url: string}) => {
+    assert.ok(served.has(v.url), v.url);
+    assert.ok(v.fileMatch.includes('!**/node_modules/**'), v.url);
+    return v.fileMatch.filter(m => !m.startsWith('!')).map(pattern => `${pattern} ${v.url}`);
+  });
+  assert.deepEqual(fromManifest.sort(), SCHEMA_TARGETS.map(t => `${t.pattern} ${schemaUri(t.file)}`).sort());
   assert.ok(manifest.activationEvents.includes(`onFileSystem:${SCHEMA_SCHEME}`));
   assert.ok(manifest.contributes.configuration.properties['svgDiagram.jsonSchemas.enabled']);
 });

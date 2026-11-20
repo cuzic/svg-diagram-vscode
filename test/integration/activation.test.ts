@@ -109,35 +109,87 @@ suite('shared parts', () => {
 });
 
 suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => {
-  const uriOf = (name: string) => {
+  const fixture = (name: string) => {
     const base = vscode.workspace.workspaceFolders?.[0]?.uri;
     assert.ok(base);
     return vscode.Uri.joinPath(base, name);
   };
+  const unrelated = (name: string) => {
+    const base = vscode.workspace.workspaceFolders?.find(f => f.name === 'unrelated')?.uri;
+    assert.ok(base, 'the integration tests run in test/fixtures/multi-root.code-workspace');
+    return vscode.Uri.joinPath(base, name);
+  };
+  const api = () => vscode.extensions.getExtension<{testing: {schemaRoot(): {dir?: string; reason?: string} | undefined}}>('cuzic.svg-diagram-vscode')?.exports.testing;
   // the JSON language server's diagnostics have no `source`
-  async function jsonDiagnostics(name: string, timeoutMs = 15_000): Promise<vscode.Diagnostic[]> {
-    const uri = uriOf(name);
-    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+  const jsonDiagnostics = (uri: vscode.Uri) => vscode.languages.getDiagnostics(uri).filter(d => d.source !== 'svg-diagram');
+  const show = async (uri: vscode.Uri) => vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+  async function until<T>(what: string, get: () => T | undefined, timeoutMs = 15_000): Promise<T> {
     for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
-      const found = vscode.languages.getDiagnostics(uri).filter(d => d.source !== 'svg-diagram');
-      if (found.length) return found;
+      const v = get();
+      if (v !== undefined) return v;
     }
-    assert.fail(`no json diagnostics for ${name} within ${timeoutMs}ms`);
+    assert.fail(`${what} within ${timeoutMs}ms`);
   }
+  const errorsOf = (uri: vscode.Uri) => until(`json diagnostics for ${uri.path}`, () => { const d = jsonDiagnostics(uri); return d.length ? d : undefined; });
+  const noErrorsOf = (uri: vscode.Uri) => until(`no json diagnostics for ${uri.path} (${jsonDiagnostics(uri).map(d => d.message).join(' / ')})`, () => (jsonDiagnostics(uri).length ? undefined : true));
+  const settle = () => new Promise(r => setTimeout(r, 3000)); // long enough for the JSON server to have checked the file
+
+  teardown(async () => {
+    await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', undefined, vscode.ConfigurationTarget.Global);
+  });
 
   test('site.json is checked against site.schema.json', async () => {
-    const found = await jsonDiagnostics('json/site.json');
+    const uri = fixture('json/site.json');
+    await show(uri);
+    const found = await errorsOf(uri);
     assert.ok(found.some(d => /colour/.test(d.message) && d.range.start.line === 2), found.map(d => d.message).join(' / '));
+    assert.match(api()?.schemaRoot()?.dir ?? '', /node_modules[\\/]svg-diagram[\\/]schema$/);
+  });
+
+  test('.svg-diagram.json is checked against config.schema.json', async () => {
+    const uri = fixture('json/.svg-diagram.json');
+    await show(uri);
+    const found = await errorsOf(uri);
+    assert.ok(found.some(d => /colour/.test(d.message)), found.map(d => d.message).join(' / '));
+    assert.ok(found.some(d => d.range.start.line === 1), `outDir: 1 is not flagged: ${found.map(d => d.message).join(' / ')}`);
   });
 
   test('a deck: the figure path message, and every part type is offered (spec.schema.json through the relative $ref)', async () => {
-    const found = await jsonDiagnostics('json/deck.json');
+    const uri = fixture('json/deck.json');
+    const editor = await show(uri);
+    const found = await errorsOf(uri);
     assert.ok(found.some(d => /ends in \.ts or \.json/.test(d.message) && d.range.start.line === 3), found.map(d => d.message).join(' / '));
-    const doc = await vscode.workspace.openTextDocument(uriOf('json/deck.json'));
-    const at = doc.lineAt(2).text.indexOf('"type": "') + '"type": "'.length;
-    const list = await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', doc.uri, new vscode.Position(2, at));
+    const at = editor.document.lineAt(2).text.indexOf('"type": "') + '"type": "'.length;
+    const list = await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', uri, new vscode.Position(2, at));
     const labels = list.items.map(i => (typeof i.label === 'string' ? i.label : i.label.label).replace(/"/g, ''));
     for (const t of ['chevron', 'flowchart', 'gantt']) assert.ok(labels.includes(t), `${t} not offered: ${labels.slice(0, 10).join(', ')}`);
     assert.ok(labels.length >= 60, `only ${labels.length} part types`);
+  });
+
+  test("a site.json in a folder without svg-diagram is not checked, and the project's again once its file is shown", async function () {
+    this.timeout(60_000);
+    const other = unrelated('site.json');
+    await show(other);
+    await noErrorsOf(other);
+    await settle();
+    assert.deepEqual(jsonDiagnostics(other).map(d => d.message), []);
+    assert.equal(api()?.schemaRoot()?.dir, undefined);
+    const own = fixture('json/site.json');
+    await show(own);
+    await errorsOf(own);
+    await show(other);
+    await noErrorsOf(other);
+  });
+
+  test('svgDiagram.jsonSchemas.enabled: off stops the checks, on brings them back', async function () {
+    this.timeout(60_000);
+    const uri = fixture('json/site.json');
+    await show(uri);
+    await errorsOf(uri);
+    await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', false, vscode.ConfigurationTarget.Global);
+    await noErrorsOf(uri);
+    assert.match(api()?.schemaRoot()?.reason ?? '', /jsonSchemas\.enabled/);
+    await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', true, vscode.ConfigurationTarget.Global);
+    await errorsOf(uri);
   });
 });

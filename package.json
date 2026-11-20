@@ -182,13 +182,15 @@
     "jsonValidation": [
       {
         "fileMatch": [
-          ".svg-diagram.json"
+          ".svg-diagram.json",
+          "!**/node_modules/**"
         ],
         "url": "svg-diagram-schema://schema/config.schema.json"
       },
       {
         "fileMatch": [
-          "site.json"
+          "site.json",
+          "!**/node_modules/**"
         ],
         "url": "svg-diagram-schema://schema/site.schema.json"
       },
@@ -196,7 +198,8 @@
         "fileMatch": [
           "deck.json",
           "deck-*.json",
-          "*.deck.json"
+          "*.deck.json",
+          "!**/node_modules/**"
         ],
         "url": "svg-diagram-schema://schema/deck.schema.json"
       }

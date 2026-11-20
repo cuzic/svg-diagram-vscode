@@ -1,63 +1,109 @@
-// Answers svg-diagram-schema://schema/<file> (package.json `jsonValidation`) with the project's own JSON Schemas.
-// See schemas.ts for which file is served.
+// Answers svg-diagram-schema://schema/<file> (package.json `jsonValidation`) with one project's JSON Schemas.
+// See schemas.ts for why it is one project at a time.
+//
+// The project is the one of the active JSON file that gets a schema (site.json, deck.json, …). While another kind of
+// editor is active, the last such project stays. Before any, it is the active file's project, else the one workspace
+// folder that has svg-diagram. When the answer changes (another project's file is shown, a setting changed,
+// svg-diagram was installed or upgraded), all five files are announced as changed, so VS Code fetches them again
+// together and re-checks the open JSON files.
 import * as vscode from 'vscode';
-import {ACCEPT_ALL, findSchema, SCHEMA_FILES, SCHEMA_SCHEME, type SchemaAnswer, type SchemaCandidate, type SchemaFile, sameAnswer, schemaFileOf, schemaUri} from './schemas.ts';
+import {describeRoot, isSchemaTarget, onlyRoot, rootFor, SCHEMA_FILES, SCHEMA_SCHEME, type SchemaProject, type SchemaRoot, sameRoot, schemaFileOf, schemaText, schemaUri} from './schemas.ts';
 
 export interface SchemaProviderDeps {
-  /** Where to look, best first (the active file's project, then each workspace folder). */
-  candidates(): SchemaCandidate[];
+  /** The project of a file or a workspace folder. */
+  projectOf(scope: vscode.Uri): SchemaProject;
   log: vscode.LogOutputChannel;
 }
 
 export class SchemaProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidChange = this.changed.event;
-  /** What VS Code was last given, per file: a refresh tells it to fetch again only when the answer changed. */
-  private readonly served = new Map<SchemaFile, SchemaAnswer>();
-  private readonly disposables: vscode.Disposable[] = [];
-
   private readonly deps: SchemaProviderDeps;
+  private readonly disposables: vscode.Disposable[] = [];
+  private folderWatchers: vscode.Disposable[] = [];
+  /** The JSON file whose project the schemas come from (the last active one). */
+  private scope: vscode.Uri | undefined;
+  private root: SchemaRoot | undefined;
+  /** Has VS Code asked yet? (until then, a change need not be announced) */
+  private served = false;
 
   constructor(deps: SchemaProviderDeps) {
     this.deps = deps;
-    // a fresh `pnpm add` / upgrade of svg-diagram (node_modules may be excluded from watching: focus also refreshes)
-    const watcher = vscode.workspace.createFileSystemWatcher('**/{node_modules/svg-diagram/package.json,.svg-diagram.json}');
+    const configs = vscode.workspace.createFileSystemWatcher('**/.svg-diagram.json', false, true, false);
     this.disposables.push(
       this.changed,
-      watcher,
-      watcher.onDidCreate(() => this.refresh()),
-      watcher.onDidChange(() => this.refresh()),
-      watcher.onDidDelete(() => this.refresh()),
+      configs,
+      configs.onDidCreate(() => this.refresh()),
+      configs.onDidDelete(() => this.refresh()),
+      vscode.window.onDidChangeActiveTextEditor(e => { if (e && this.isTarget(e.document.uri)) this.refresh(); }),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => { this.watchFolders(); this.refresh(); }),
       vscode.workspace.registerTextDocumentContentProvider(SCHEMA_SCHEME, this),
     );
+    this.watchFolders();
   }
 
   provideTextDocumentContent(uri: vscode.Uri): string {
-    const file = schemaFileOf(uri.path);
+    const file = schemaFileOf(uri);
     if (!file) throw new Error(`${uri.toString()}: svg-diagram の JSON Schema ではない`);
-    const answer = this.answer(file);
-    const before = this.served.get(file);
-    if (answer.file !== before?.file || answer.reason !== before?.reason) this.deps.log.info(`JSON Schema ${file}: ${answer.file ?? answer.reason}`);
-    this.served.set(file, answer);
-    return answer.text;
+    if (!this.root) this.setRoot(this.pick());
+    this.served = true;
+    return schemaText(this.root ?? {}, file);
   }
 
-  /** Looks again (settings, folders, focus, node_modules changed) and tells VS Code about the schemas that differ now. */
+  /** Looks again (active JSON file, settings, folders, focus, node_modules changed); announces a changed root. */
   refresh(): void {
-    for (const file of SCHEMA_FILES) {
-      const before = this.served.get(file);
-      if (before && !sameAnswer(before, this.answer(file))) this.changed.fire(vscode.Uri.parse(schemaUri(file)));
-    }
+    const root = this.pick();
+    if (sameRoot(this.root, root)) return;
+    this.setRoot(root);
+    if (this.served) for (const file of SCHEMA_FILES) this.changed.fire(vscode.Uri.parse(schemaUri(file)));
   }
 
-  private answer(file: SchemaFile): SchemaAnswer {
+  /** Which core the files come from now (the integration tests read it through the extension's exports). */
+  get current(): SchemaRoot | undefined {
+    return this.root;
+  }
+
+  private setRoot(root: SchemaRoot): void {
+    this.root = root;
+    const whose = this.scope ? `${vscode.workspace.asRelativePath(this.scope)} の案件` : 'ワークスペース';
+    this.deps.log.info(`JSON Schema（${whose}）: ${describeRoot(root)}`);
+  }
+
+  private pick(): SchemaRoot {
     if (!vscode.workspace.getConfiguration('svgDiagram').get<boolean>('jsonSchemas.enabled', true)) {
-      return {text: ACCEPT_ALL, reason: '設定 svgDiagram.jsonSchemas.enabled が false なので、JSON は検査しない'};
+      return {reason: '設定 svgDiagram.jsonSchemas.enabled が false なので、JSON は検査しない'};
     }
-    return findSchema(file, this.deps.candidates());
+    const active = vscode.window.activeTextEditor?.document.uri;
+    if (active && this.isTarget(active)) this.scope = active;
+    if (this.scope) return rootFor(this.deps.projectOf(this.scope));
+    if (active?.scheme === 'file') {
+      const root = rootFor(this.deps.projectOf(active));
+      if (root.dir) return root;
+    }
+    return onlyRoot((vscode.workspace.workspaceFolders ?? []).map(f => rootFor(this.deps.projectOf(f.uri))));
+  }
+
+  private isTarget(uri: vscode.Uri): boolean {
+    return uri.scheme === 'file' && isSchemaTarget(uri.fsPath);
+  }
+
+  /**
+   * A fresh `pnpm add` or an upgrade in a workspace folder (not recursive: a recursive watcher skips node_modules by
+   * `files.watcherExclude`). Packages below a folder are seen when the window gets the focus again.
+   */
+  private watchFolders(): void {
+    for (const d of this.folderWatchers) d.dispose();
+    this.folderWatchers = [];
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const nodeModules = vscode.Uri.joinPath(folder.uri, 'node_modules');
+      for (const pattern of [new vscode.RelativePattern(nodeModules, 'svg-diagram'), new vscode.RelativePattern(vscode.Uri.joinPath(nodeModules, 'svg-diagram'), 'package.json')]) {
+        const w = vscode.workspace.createFileSystemWatcher(pattern);
+        this.folderWatchers.push(w, w.onDidCreate(() => this.refresh()), w.onDidChange(() => this.refresh()), w.onDidDelete(() => this.refresh()));
+      }
+    }
   }
 
   dispose(): void {
-    for (const d of this.disposables) d.dispose();
+    for (const d of [...this.disposables, ...this.folderWatchers]) d.dispose();
   }
 }

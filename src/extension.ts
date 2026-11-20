@@ -7,7 +7,7 @@ import {describeCli, type ResolveResult, type ResolvedCli, resolveCli} from './c
 import {Checker, findDiagramSources} from './diagnostics.ts';
 import {isSource, PREVIEW_VIEW_TYPE, PreviewManager} from './preview.ts';
 import {SchemaProvider} from './schema-provider.ts';
-import type {SchemaCandidate} from './schemas.ts';
+import type {SchemaProject, SchemaRoot} from './schemas.ts';
 import {detectPackageManager, readSetupState, setupCommand} from './setup.ts';
 import {showMenu, Status} from './status.ts';
 import {SvgDiagramTaskProvider, TASK_TYPE} from './tasks.ts';
@@ -18,7 +18,7 @@ const warned = new Set<string>();
 const WINDOWS_UNSUPPORTED = 'svg-diagram の CLI（bin/svg-diagram）は bash のスクリプトなので、Windows ではこの拡張は動かない。WSL（Remote - WSL）で開く';
 
 /** What activate() returns (ext.exports). Only the integration tests use it. */
-export interface ExtensionApi { testing: {previewMessage(): unknown} }
+export interface ExtensionApi { testing: {previewMessage(): unknown; schemaRoot(): SchemaRoot | undefined} }
 
 export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const log = vscode.window.createOutputChannel('svg-diagram', {log: true});
@@ -32,7 +32,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const setSourceContext = (editor = vscode.window.activeTextEditor) =>
     void vscode.commands.executeCommand('setContext', 'svgDiagram.isSource', !!editor && isSource(editor.document));
   const tasks = new SvgDiagramTaskProvider(peekCli);
-  const schemas = new SchemaProvider({candidates: schemaCandidates, log});
+  const schemas = new SchemaProvider({projectOf: schemaProject, log});
   const status = new Status({
     peekCli,
     isSourceActive: () => !!vscode.window.activeTextEditor && isSource(vscode.window.activeTextEditor.document),
@@ -96,7 +96,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       if (e.affectsConfiguration('svgDiagram.cliPath')) { warned.clear(); logCliForAllFolders(); status.refresh(); }
       if (e.affectsConfiguration('svgDiagram.cliPath') || e.affectsConfiguration('svgDiagram.jsonSchemas.enabled')) schemas.refresh();
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => { logCliForAllFolders(); schemas.refresh(); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => logCliForAllFolders()),
   );
   log.info(`svg-diagram 拡張 ${context.extension.packageJSON.version} を起動した`);
   if (process.platform === 'win32') log.warn(WINDOWS_UNSUPPORTED);
@@ -104,7 +104,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   checker.recheckOpen();
   setSourceContext();
   status.refresh();
-  return {testing: {previewMessage: () => preview.lastMessage}};
+  return {testing: {previewMessage: () => preview.lastMessage, schemaRoot: () => schemas.current}};
 }
 
 async function openPreview(preview: PreviewManager, uri: vscode.Uri | undefined, column: vscode.ViewColumn): Promise<void> {
@@ -125,15 +125,16 @@ export function deactivate(): void {
   output = undefined;
 }
 
-/**
- * Where the JSON Schemas may come from, best first: the project of the active file (a package below the workspace
- * folder in a monorepo), then each workspace folder. A schema request does not say which file it is for.
- */
-function schemaCandidates(): SchemaCandidate[] {
-  if (process.platform === 'win32') return [];
-  const active = vscode.window.activeTextEditor?.document.uri;
-  const scopes = [...(active?.scheme === 'file' ? [active] : []), ...(vscode.workspace.workspaceFolders ?? []).map(f => f.uri)];
-  return scopes.map(scope => ({cli: lookup(scope).cli, folder: vscode.workspace.getWorkspaceFolder(scope)?.uri.fsPath}));
+/** The project of a file or folder, for the JSON Schemas (also on Windows: serving them runs nothing). */
+function schemaProject(scope: vscode.Uri): SchemaProject {
+  const folder = vscode.workspace.getWorkspaceFolder(scope);
+  const isFolder = !!folder && scope.toString() === folder.uri.toString();
+  const cliPath = vscode.workspace.getConfiguration('svgDiagram', folder ?? scope).inspect<string>('cliPath');
+  return {
+    cli: lookup(scope).cli,
+    from: isFolder ? scope.fsPath : path.dirname(scope.fsPath),
+    settingIsGlobal: !(cliPath?.workspaceValue?.trim() || cliPath?.workspaceFolderValue?.trim()),
+  };
 }
 
 /**
