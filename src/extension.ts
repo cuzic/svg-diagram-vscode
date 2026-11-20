@@ -1,14 +1,21 @@
 import * as vscode from 'vscode';
 import {describeCli, type ResolvedCli, resolveCli} from './cli.ts';
 import {Checker, findDiagramSources} from './diagnostics.ts';
+import {isSource, PreviewManager} from './preview.ts';
 
 let output: vscode.LogOutputChannel | undefined;
 const warned = new Set<string>();
 
-export function activate(context: vscode.ExtensionContext): void {
+/** What activate() returns (ext.exports). Only the integration tests use it. */
+export interface ExtensionApi { testing: {previewMessage(): unknown} }
+
+export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const log = vscode.window.createOutputChannel('svg-diagram', {log: true});
   output = log;
   const checker = new Checker({getCli, log});
+  const preview = new PreviewManager({getCli, log, scratchDir: context.storageUri ?? context.globalStorageUri});
+  const setSourceContext = (editor = vscode.window.activeTextEditor) =>
+    void vscode.commands.executeCommand('setContext', 'svgDiagram.isSource', !!editor && isSource(editor.document));
   const status = vscode.window.createStatusBarItem('svgDiagram.status', vscode.StatusBarAlignment.Left);
   status.name = 'svg-diagram';
   status.text = '$(sync~spin) svg-diagram';
@@ -18,7 +25,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     log,
     checker,
+    preview,
     status,
+    vscode.window.onDidChangeActiveTextEditor(e => setSourceContext(e)),
+    vscode.workspace.onDidSaveTextDocument(doc => { if (doc === vscode.window.activeTextEditor?.document) setSourceContext(); }),
+    vscode.commands.registerCommand('svgDiagram.openPreview', (uri?: vscode.Uri) => openPreview(preview, uri, vscode.ViewColumn.Beside)),
+    vscode.commands.registerCommand('svgDiagram.showPreview', (uri?: vscode.Uri) => openPreview(preview, uri, vscode.ViewColumn.Active)),
     checker.onBusyChange(busy => (busy > 0 ? status.show() : status.hide())),
     vscode.commands.registerCommand('svgDiagram.showOutput', () => output?.show()),
     vscode.commands.registerCommand('svgDiagram.showCli', showCli),
@@ -43,6 +55,14 @@ export function activate(context: vscode.ExtensionContext): void {
   log.info(`svg-diagram 拡張 ${context.extension.packageJSON.version} を起動した`);
   logCliForAllFolders();
   checker.recheckOpen();
+  setSourceContext();
+  return {testing: {previewMessage: () => preview.lastMessage}};
+}
+
+function openPreview(preview: PreviewManager, uri: vscode.Uri | undefined, column: vscode.ViewColumn): void {
+  const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+  if (!target) return void vscode.window.showInformationMessage('プレビューする図のソースを開いてから実行する');
+  preview.show(target, column);
 }
 
 export function deactivate(): void {

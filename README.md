@@ -2,7 +2,7 @@
 
 [svg-diagram](https://github.com/cuzic/svg-diagram) の図のソース（`diagrams/*.ts`、JSON spec）を、VS Code の中で書く・検査する・プレビューするための拡張。
 
-> 開発中（0.0.x）。今は検査の結果を「問題」パネルに出すところまで。
+> 開発中（0.0.x）。今は検査（「問題」パネル）とライブプレビューまで。
 
 ## 方針
 
@@ -19,6 +19,17 @@
 - core 0.5.0 以前は、ソースが throw すると JSON を出さずに止まる。そのときは stderr から、throw した行に `build-error` を付ける。
 - コマンド: 「svg-diagram: この図を検査」「svg-diagram: ワークスペースの図をすべて検査」。
 - 設定: `svgDiagram.check.enabled` / `check.onSave` / `check.onOpen`（どれも既定 true）。
+
+## プレビュー
+
+図のソースを開いて、エディタ右上のプレビューのボタン、`Ctrl+K V`（Mac は `Cmd+K V`）、またはコマンド「svg-diagram: プレビューを横に開く」。
+
+- `svg-diagram build <ソース> --out <拡張の作業用フォルダ> --no-lint` で描く。**案件には何も書き出さない**（`svg/` の SVG は変わらない）。lint は飛ばす（所見は「問題」パネルに出る）。
+- 保存したときに描き直す。同じフォルダの `.ts` / `.js` / `.json`（共通部品や設定）を保存したときも描き直す。
+- プレビューは 1 枚で、アクティブなエディタの図のソースに付いていく。
+- 描けなかったときは、前に描けた図を残したまま「古い図」と表示し、理由（throw した行など）を上に出す。
+- 表示: 幅に合わせる / 拡大・縮小 / 原寸、背景（白・暗・格子）。VS Code を再読み込みしても開き直す。
+- SVG は Webview に直接埋め込む（Phase 2 で、クリックしたノードからソースへ飛ぶため）。CSP でネットワークと、SVG 内のスクリプトは止めている。
 
 ## 起動する条件
 
@@ -47,7 +58,7 @@ core を手元で変えながら試すときは、設定 `svgDiagram.cliPath` �
 2. CI（済）
 3. core（CLI）の見つけ方（済）
 4. `check --format json` → Problems パネル（済）
-5. ライブプレビュー
+5. ライブプレビュー（済）
 6. JSON spec の JSON Schema（core の PR が先）
 7. ステータスバー・`init` / `typecheck` のコマンド
 8. 以降: ソース位置（core の ADR）、プレビュー ⇄ ソースのジャンプ、Quick Fix、Markdown、差分、AI 連携、公開

@@ -1,11 +1,10 @@
 // Runs `svg-diagram check --format json` and shows the findings in the Problems panel.
-import {execFile} from 'node:child_process';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import {checkArgs, crashFinding, type Finding, findingMessage, isDiagramSource, parseCheckOutput, placeFinding} from './check.ts';
 import type {ResolvedCli} from './cli.ts';
+import {exec} from './exec.ts';
 
-const TIMEOUT_MS = 120_000;
 /** One CLI run checks at most this many files (the command line stays short; a stuck run loses little). */
 const BATCH = 40;
 
@@ -80,7 +79,7 @@ export class Checker implements vscode.Disposable {
     log.debug(`${cli.bin} ${checkArgs(files).join(' ')}（cwd: ${cwd}）`);
     this.setBusy(+1);
     try {
-      const {stdout, stderr, error} = await exec(cli.bin, checkArgs(files), cwd, abort.signal);
+      const {stdout, stderr, error} = await exec(cli.bin, checkArgs(files), {cwd, signal: abort.signal});
       if (abort.signal.aborted) return;
       if (stderr.trim()) log.info(stderr.trim());
       let out: ReturnType<typeof parseCheckOutput>;
@@ -155,13 +154,6 @@ function setting<T>(uri: vscode.Uri, key: string): T | undefined {
 
 async function readText(uri: vscode.Uri): Promise<string | undefined> {
   try { return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)); } catch { return undefined; }
-}
-
-function exec(bin: string, args: string[], cwd: string, signal: AbortSignal): Promise<{stdout: string; stderr: string; error?: Error}> {
-  return new Promise(resolve => {
-    execFile(bin, args, {cwd, signal, timeout: TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8'}, (error, stdout, stderr) =>
-      resolve({stdout, stderr, ...(error ? {error} : {})}));
-  });
 }
 
 /** All diagram sources in the workspace (node_modules and the files.exclude setting are left out). */

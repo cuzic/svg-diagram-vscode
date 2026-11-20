@@ -24,7 +24,8 @@
     "workspaceContains:node_modules/svg-diagram/package.json",
     "workspaceContains:**/.svg-diagram.json",
     "onLanguage:typescript",
-    "onLanguage:javascript"
+    "onLanguage:javascript",
+    "onWebviewPanel:svgDiagram.preview"
   ],
   "contributes": {
     "commands": [
@@ -46,6 +47,17 @@
       {
         "command": "svgDiagram.checkWorkspace",
         "title": "ワークスペースの図をすべて検査",
+        "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.openPreview",
+        "title": "プレビューを横に開く",
+        "category": "svg-diagram",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "svgDiagram.showPreview",
+        "title": "プレビューを開く",
         "category": "svg-diagram"
       }
     ],
@@ -84,15 +96,43 @@
           "command": "svgDiagram.checkFile",
           "when": "resourceExtname =~ /\\.(m?ts|m?js)$/",
           "group": "svg-diagram"
+        },
+        {
+          "command": "svgDiagram.openPreview",
+          "when": "resourceExtname =~ /\\.(m?ts|m?js)$/",
+          "group": "svg-diagram"
         }
       ],
       "commandPalette": [
         {
           "command": "svgDiagram.checkFile",
           "when": "editorLangId =~ /^(typescript|javascript)$/"
+        },
+        {
+          "command": "svgDiagram.openPreview",
+          "when": "svgDiagram.isSource"
+        },
+        {
+          "command": "svgDiagram.showPreview",
+          "when": "svgDiagram.isSource"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "svgDiagram.openPreview",
+          "when": "svgDiagram.isSource",
+          "group": "navigation"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "svgDiagram.openPreview",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "svgDiagram.isSource && editorTextFocus"
+      }
+    ]
   },
   "scripts": {
     "build": "node scripts/build.ts",
