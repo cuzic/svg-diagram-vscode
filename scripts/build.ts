@@ -22,7 +22,7 @@ const options: esbuild.BuildOptions = {
 if (tests) {
   const fs = await import('node:fs');
   const entryPoints = fs.globSync('test/integration/*.test.ts');
-  await esbuild.build({entryPoints, outdir: 'dist-test/integration', bundle: true, format: 'cjs', platform: 'node', target: 'node22', external: ['vscode', 'mocha'], sourcemap: true, logLevel: 'info'});
+  await esbuild.build({entryPoints, outdir: 'dist-test/integration', outExtension: {'.js': '.cjs'}, bundle: true, format: 'cjs', platform: 'node', target: 'node22', external: ['vscode', 'mocha'], sourcemap: true, logLevel: 'info'});
 }
 
 if (watch) await (await esbuild.context(options)).watch();
