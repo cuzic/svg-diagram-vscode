@@ -45,6 +45,13 @@ export async function launch(opts: {open: string[]; videoDir?: string; debugDir?
       `--user-data-dir=${path.join(tmp, 'user')}`,
       `--extensions-dir=${path.join(tmp, 'ext')}`,
       '--disable-workspace-trust',
+      // no OS keyring on CI runners (no D-Bus secret service, a locked Keychain): VS Code waits for it at start.
+      // VS Code's own smoke tests start with the in-memory secret storage for the same reason.
+      '--use-inmemory-secretstorage',
+      ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
+      ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+      '--disable-updates',
+      '--disable-experiments',
       '--skip-welcome',
       '--skip-release-notes',
       '--disable-telemetry',
@@ -79,7 +86,9 @@ async function workbenchWindow(app: ElectronApplication, debugDir?: string): Pro
   console.log(`[e2e] first window after ${Date.now() - t0}ms: ${first.url()}`);
   for (const end = Date.now() + 120_000; Date.now() < end; await new Promise(r => setTimeout(r, 500))) {
     for (const page of app.windows()) {
-      if (await page.locator('.monaco-workbench').count().catch(() => 0)) {
+      // each probe has its own deadline: a window that never loads must not hang the loop
+      const found = await Promise.race([page.locator('.monaco-workbench').count().catch(() => 0), new Promise<number>(r => setTimeout(() => r(0), 2000))]);
+      if (found) {
         console.log(`[e2e] workbench after ${Date.now() - t0}ms`);
         return page;
       }
@@ -90,7 +99,7 @@ async function workbenchWindow(app: ElectronApplication, debugDir?: string): Pro
   if (debugDir) {
     fs.mkdirSync(debugDir, {recursive: true});
     fs.writeFileSync(path.join(debugDir, 'windows.txt'), lines.join('\n') + '\n');
-    for (const [i, p] of pages.entries()) await p.screenshot({path: path.join(debugDir, `window-${i}.png`)}).catch(() => undefined);
+    for (const [i, p] of pages.entries()) await p.screenshot({path: path.join(debugDir, `window-${i}.png`), timeout: 10_000}).catch(() => undefined);
   }
   throw new Error(`no VS Code window with the workbench after 120s; windows:\n${lines.join('\n')}`);
 }
