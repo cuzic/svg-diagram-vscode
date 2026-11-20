@@ -52,9 +52,11 @@ jobs:
       # "stable" is resolved to its version number, so the cache key changes only when a new VS Code is released
       # (one entry per OS and version, no growth per run)
       - name: Resolve the VS Code version
+        shell: bash # -o pipefail: a failed curl must fail the step, not leave an empty version
         run: |
           v='${{ matrix.vscode }}'
           if [ "$v" = stable ]; then v=$(curl -fsSL https://update.code.visualstudio.com/api/releases/stable | jq -r '.[0]'); fi
+          [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::could not resolve the VS Code version (got '$v')"; exit 1; }
           echo "VSCODE_VERSION=$v" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:

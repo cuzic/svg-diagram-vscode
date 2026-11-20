@@ -68,17 +68,19 @@ export async function launch(opts: {open: string[]; traceDir?: string; debugDir?
   const log: string[] = [];
   for (const stream of [child.stdout, child.stderr]) stream?.on('data', (b: Buffer) => { log.push(b.toString()); if (process.env['E2E_TRACE']) process.stderr.write(b); });
   const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+  let spawnError: Error | undefined;
+  child.on('error', e => { spawnError = e; }); // ENOENT / EACCES: reported by connect(), not as an uncaught exception
 
   /** Kills the whole process group (main, renderer, extension host, the CLI it runs), waits (≤5 s) for it, then removes the profile. */
   const stop = async () => {
-    if (child.exitCode === null && child.pid) {
+    if (child.exitCode === null && child.signalCode === null && child.pid) {
       try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
       await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
     }
     try { fs.rmSync(tmp, {recursive: true, force: true, maxRetries: 5, retryDelay: 200}); } catch { /* a straggler still writing: left in the temp dir */ }
   };
   try {
-    const browser = await connect(child, log);
+    const browser = await connect(child, log, () => spawnError);
     const win = await workbenchWindow(browser, opts.debugDir);
     const context = win.context();
     if (opts.traceDir) await context.tracing.start({screenshots: true, snapshots: true});
@@ -100,10 +102,13 @@ export async function launch(opts: {open: string[]; traceDir?: string; debugDir?
 }
 
 /** Waits for Chromium's "DevTools listening on ws://127.0.0.1:<port>/..." line, then connects to that port. */
-async function connect(child: ChildProcess, log: string[]): Promise<Browser> {
+async function connect(child: ChildProcess, log: string[], spawnError: () => Error | undefined): Promise<Browser> {
   const end = Date.now() + 120_000;
   for (;;) {
-    if (child.exitCode !== null) throw new Error(`VS Code exited (code ${child.exitCode}) before its DevTools port opened`);
+    const err = spawnError();
+    if (err) throw new Error(`VS Code could not be started: ${err.message}`);
+    // a crash (SIGSEGV / SIGABRT) leaves exitCode null and sets signalCode
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`VS Code exited (${child.signalCode ?? `code ${child.exitCode}`}) before its DevTools port opened`);
     const port = log.join('').match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//)?.[1];
     if (port) {
       try {
