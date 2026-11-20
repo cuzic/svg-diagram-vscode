@@ -6,7 +6,7 @@
 
 ## 対応する環境
 
-- Linux / macOS、および Windows の WSL（Remote - WSL）。**Windows では動かない**（core の CLI `bin/svg-diagram` が bash のスクリプトのため）。起動はするが、CLI を使う操作は理由を出して止まる。
+- Linux / macOS、および Windows の WSL（Remote - WSL）。**Windows では動かない**（core の CLI `bin/svg-diagram` が bash のスクリプトのため）。起動はするが、CLI を使う操作は理由を出して止まる（JSON の補完と検査は効く）。
 - VS Code 1.100 以降。信頼したワークスペースだけ。
 
 ## 方針
@@ -34,12 +34,14 @@
 
 ## JSON の補完と検査（JSON Schema）
 
-`.svg-diagram.json`・`site.json`・デッキ（`deck.json`・`deck-*.json`・`*.deck.json`）を開くと、VS Code の JSON の補完・説明・誤りの表示が効く。部品の `type` は全種類から選べ、選ぶと説明と例のひな形が出る。
+`.svg-diagram.json`・`site.json`・デッキ（`deck.json`・`deck-*.json`・`*.deck.json`）を開くと、VS Code の JSON の補完・説明・誤りの表示が効く。部品の `type` は全種類から選べ、選ぶと説明と例のひな形が出る。`node_modules` の下のファイルは対象外。
 
-- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。探し方は CLI と同じ（設定 `svgDiagram.cliPath` → 開いているファイルから上の `node_modules` → 各ワークスペースフォルダ）。`PATH` の svg-diagram は、フォルダに `.svg-diagram.json` があるときだけ使う。
-- svg-diagram が見つからない・0.8.0 より古い・設定 `svgDiagram.jsonSchemas.enabled` が false のときは、何も検査しない（`site.json` や `deck.json` はよくある名前なので、svg-diagram と関係ない案件で誤りを出さない）。どれを使ったかは出力ログに出る。
+- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今は `pnpm add -D github:cuzic/svg-diagram#v0.8.0` で入れる。
+- **ウィンドウで 1 つの案件の schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。その案件は、最後にアクティブにした対象の JSON ファイルの案件。そのファイルから上の `node_modules/svg-diagram`、なければ設定 `svgDiagram.cliPath` か `PATH` の svg-diagram。まだ開いていなければ、svg-diagram があるワークスペースフォルダが 1 つだけのとき、そのフォルダ。開いているほかの JSON ファイルも、その schema で検査し直す。マルチルートやモノレポで別の案件のファイルに切り替えると、その案件の schema に替わる。
+- svg-diagram と関係ない案件では何も検査しない（`site.json` や `deck.json` はよくある名前なので）。`PATH` の svg-diagram と、ユーザー設定の `svgDiagram.cliPath` は、そのファイルから上に `.svg-diagram.json` があるときだけ使う（ワークスペース・フォルダの設定は、その案件のものとして使う）。svg-diagram が 0.8.0 より古いとき、設定 `svgDiagram.jsonSchemas.enabled` が false のときも検査しない。どれを使ったか・なぜ検査しないかは、出力ログに出る。
 - デッキが指す図の `.json` は名前が決まっていないので、先頭に `"$schema": "./node_modules/svg-diagram/schema/figure.schema.json"` を書く（パスはそのファイルから）。`"$schema"` を書いたファイルは、拡張によらず VS Code がそれに従う。
-- svg-diagram を入れた・上げたあとは、ウィンドウに戻ったときに読み直す。
+- svg-diagram を入れた・上げたときは、ワークスペースフォルダの直下の `node_modules` なら気づいて読み直す。それより下のパッケージに入れたときは、ウィンドウにフォーカスを戻したときに読み直す。
+- Windows でも効く（schema のファイルを読むだけで、CLI は走らせない）。信頼していないワークスペースでは、拡張ごと止まるので効かない。
 
 ## プレビュー
 
