@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {test} from 'node:test';
 import {checkArgs, crashFinding, type Finding, findingMessage, isDiagramSource, parseCheckOutput, placeFinding} from '../../src/check.ts';
 
@@ -57,14 +60,20 @@ test('findingMessage adds the fix when the CLI gives one', () => {
   assert.equal(findingMessage(f({message: 'x'})), 'x');
 });
 
-test('isDiagramSource: imports the DSL itself; not the browser entry, not .d.ts, not other files', () => {
-  assert.ok(isDiagramSource('a.ts', "import {diagram} from 'svg-diagram';"));
-  assert.ok(isDiagramSource('a.mjs', 'import {box} from "svg-diagram"'));
-  assert.ok(isDiagramSource('a.ts', "import type {X} from 'svg-diagram';\nconst {box} = await import('svg-diagram');"));
-  assert.ok(!isDiagramSource('a.ts', "import {renderInBrowser} from 'svg-diagram/browser';"));
-  assert.ok(!isDiagramSource('a.d.ts', "import {diagram} from 'svg-diagram';"));
-  assert.ok(!isDiagramSource('a.md', "import {diagram} from 'svg-diagram';"));
-  assert.ok(!isDiagramSource('a.ts', "import {x} from 'svg-diagram-extra';"));
+test('isDiagramSource: imports the DSL itself and has a default export; not the browser entry, not .d.ts, not other files', () => {
+  const def = '\nexport default function define() { return diagram({}); }';
+  assert.ok(isDiagramSource('a.ts', "import {diagram} from 'svg-diagram';" + def));
+  assert.ok(isDiagramSource('a.mjs', 'import {box} from "svg-diagram"' + def));
+  assert.ok(isDiagramSource('a.ts', "import type {X} from 'svg-diagram';\nconst {box} = await import('svg-diagram');" + def));
+  assert.ok(isDiagramSource('a.ts', "import {diagram} from 'svg-diagram';\nfunction define() {}\nexport {define as default};"));
+  assert.ok(!isDiagramSource('a.ts', "import {renderInBrowser} from 'svg-diagram/browser';" + def));
+  assert.ok(!isDiagramSource('a.d.ts', "import {diagram} from 'svg-diagram';" + def));
+  assert.ok(!isDiagramSource('a.md', "import {diagram} from 'svg-diagram';" + def));
+  assert.ok(!isDiagramSource('a.ts', "import {x} from 'svg-diagram-extra';" + def));
+});
+
+test('isDiagramSource: a module of shared parts (no default export) is not a diagram', () => {
+  assert.ok(!isDiagramSource('parts.ts', "import {box} from 'svg-diagram';\nexport const step = (t: string) => box({title: t});"));
 });
 
 // what core 0.5.0 prints when a source throws (check-diagram stops without JSON)
@@ -97,6 +106,20 @@ Error: diagram({theme}) must be one of 1, 2
   const c = crashFinding(file, stderr);
   assert.equal(c.line, 4);
   assert.equal(c.message, 'Error: diagram({theme}) must be one of 1, 2');
+});
+
+test('crashFinding: a path through a symlink is matched by its real path (Node prints that one)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'svgd-crash-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'real'));
+    fs.writeFileSync(path.join(dir, 'real', 'a.ts'), '');
+    fs.symlinkSync(path.join(dir, 'real'), path.join(dir, 'link'));
+    const real = fs.realpathSync(path.join(dir, 'real', 'a.ts'));
+    const c = crashFinding(path.join(dir, 'link', 'a.ts'), `Error: x\n    at define (${pathToFileURL(real).href}:7:3)\n`);
+    assert.equal(c.line, 7);
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
 });
 
 test('crashFinding: nothing recognisable → first line, the last meaningful stderr line', () => {

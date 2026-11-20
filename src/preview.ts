@@ -75,12 +75,17 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
     void this.render();
   }
 
-  /** The source itself, or any script in its folder (a shared part it may import), was saved: redraw. */
+  /**
+   * Redraw when the source itself is saved, or a script / .svg-diagram.json in the same workspace folder (a shared
+   * part it may import, the project settings). Not package.json, .vscode/settings.json or files outside any folder.
+   */
   private onSaved(doc: vscode.TextDocument): void {
     if (!this.panel || !this.source || doc.uri.scheme !== 'file') return;
     if (doc.uri.toString() === this.source.toString()) return void this.render();
-    const same = vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === vscode.workspace.getWorkspaceFolder(this.source)?.uri.toString();
-    if (same && /\.(m?ts|m?js|json)$/.test(doc.fileName)) void this.render();
+    const folder = vscode.workspace.getWorkspaceFolder(this.source);
+    const same = !!folder && vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === folder.uri.toString();
+    const relevant = /\.(m?ts|m?js)$/.test(doc.fileName) || path.basename(doc.fileName) === '.svg-diagram.json';
+    if (same && relevant && !doc.uri.fsPath.split(path.sep).includes('node_modules')) void this.render();
   }
 
   /** Builds the current source into scratch space and sends the SVG (or why it failed) to the page. */
@@ -98,8 +103,14 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
 
     // one folder per source: build also writes the reveal steps (name.reveal-N.svg) beside --out
     const dir = vscode.Uri.joinPath(this.deps.scratchDir, 'preview', createHash('sha1').update(source.fsPath).digest('hex').slice(0, 16));
-    await fs.rm(dir.fsPath, {recursive: true, force: true});
-    await fs.mkdir(dir.fsPath, {recursive: true});
+    try {
+      await fs.rm(dir.fsPath, {recursive: true, force: true});
+      await fs.mkdir(dir.fsPath, {recursive: true});
+    } catch (e) {
+      if (this.building === abort) this.building = undefined;
+      return this.post({kind: 'error', title, file, message: `作業用フォルダ ${dir.fsPath} を用意できない: ${(e as Error).message}`});
+    }
+    if (abort.signal.aborted) return;
     const out = path.join(dir.fsPath, title.replace(/\.(m?ts|m?js)$/, '') + '.svg');
     const {stderr, error} = await exec(cli.bin, buildArgs(source.fsPath, out), {cwd: path.dirname(source.fsPath), signal: abort.signal});
     if (abort.signal.aborted || this.source?.toString() !== source.toString()) return;

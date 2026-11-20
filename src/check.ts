@@ -1,4 +1,5 @@
 // `svg-diagram check --format json` → findings placed in the source. No `vscode` import (unit-tested with node --test).
+import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
@@ -89,10 +90,15 @@ export function findingMessage(f: Finding): string {
   return f.data?.fix ? `${f.message}\n直し方: ${f.data.fix}` : f.message;
 }
 
-/** A diagram source imports the DSL: `from 'svg-diagram'` (or a subpath such as 'svg-diagram/browser' is not one: it is for pages). */
+/**
+ * A diagram source imports the DSL (`from 'svg-diagram'`; 'svg-diagram/browser' is for pages, not sources) and has a
+ * default export (the `define()` that build and check call). A module of shared parts imports the DSL too, but has no
+ * default export: it is not a diagram, and check / build would fail on it.
+ */
 export function isDiagramSource(fileName: string, text: string): boolean {
   if (!/\.(m?ts|m?js)$/.test(fileName) || /\.d\.ts$/.test(fileName)) return false;
-  return /\bfrom\s+['"]svg-diagram['"]|\brequire\(\s*['"]svg-diagram['"]\s*\)|\bimport\(\s*['"]svg-diagram['"]\s*\)/.test(text);
+  const importsDsl = /\bfrom\s+['"]svg-diagram['"]|\brequire\(\s*['"]svg-diagram['"]\s*\)|\bimport\(\s*['"]svg-diagram['"]\s*\)/.test(text);
+  return importsDsl && /\bexport\s+default\b|\bexport\s*\{[^}]*\bas\s+default\b/.test(text);
 }
 
 /**
@@ -102,7 +108,11 @@ export function isDiagramSource(fileName: string, text: string): boolean {
 export function crashFinding(file: string, stderr: string): Finding {
   const lines = stderr.split(/\r?\n/);
   let line: number | undefined;
-  for (const prefix of [pathToFileURL(file).href, file]) {
+  // Node prints the real path: a workspace opened through a symlink names the file differently
+  let real = file;
+  try { real = fs.realpathSync(file); } catch { /* gone, or a test path */ }
+  const prefixes = [...new Set([file, real])].flatMap(p => [pathToFileURL(p).href, p]);
+  for (const prefix of prefixes) {
     for (const s of lines) {
       const i = s.indexOf(prefix + ':');
       const m = i >= 0 ? s.slice(i + prefix.length).match(/^:(\d+)/) : null;

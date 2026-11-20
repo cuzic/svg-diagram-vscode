@@ -28,8 +28,10 @@ export interface ResolveResult {
 }
 
 export interface ResolveOptions {
-  /** The workspace folder the diagram belongs to. */
+  /** The workspace folder the diagram belongs to (the base of a relative setting; the project lookup's fallback start). */
   folder?: string;
+  /** Where the project lookup starts walking up: the diagram's own directory, so a package's node_modules below the folder is found. */
+  from?: string;
   /** `svgDiagram.cliPath`; relative to `folder`, `~` is the home directory. */
   setting?: string;
   env?: NodeJS.ProcessEnv;
@@ -46,8 +48,9 @@ export function resolveCli(opts: ResolveOptions): ResolveResult {
     if (isExecutableFile(bin)) return {cli: {bin, source: 'setting', ...packageOf(bin)}, warnings};
     warnings.push(`設定 svgDiagram.cliPath の ${bin} は実行できるファイルではないので、使わなかった`);
   }
-  if (opts.folder) {
-    const project = findProjectCli(opts.folder);
+  const start = opts.from ?? opts.folder;
+  if (start) {
+    const project = findProjectCli(start);
     if (project) return {cli: project, warnings};
   }
   const onPath = findOnPath(opts.env ?? process.env, opts.platform ?? process.platform);

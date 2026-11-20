@@ -93,3 +93,16 @@ suite('tasks and commands', () => {
     assert.deepEqual(contributed.filter(c => !all.includes(c)), []);
   });
 });
+
+suite('shared parts', () => {
+  test('a module of parts (no default export) is neither checked nor previewed', async () => {
+    const base = vscode.workspace.workspaceFolders?.[0]?.uri;
+    assert.ok(base);
+    const uri = vscode.Uri.joinPath(base, 'parts.ts');
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+    await new Promise(r => setTimeout(r, 3000)); // a check would have answered by now (the others take ~1s)
+    assert.deepEqual(vscode.languages.getDiagnostics(uri).filter(d => d.source === 'svg-diagram'), []);
+    const api = vscode.extensions.getExtension<{testing: {previewMessage(): {file?: string} | undefined}}>('cuzic.svg-diagram-vscode')?.exports;
+    assert.notEqual(api?.testing.previewMessage()?.file, uri.fsPath);
+  });
+});

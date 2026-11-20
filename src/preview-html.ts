@@ -82,6 +82,7 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
   const BGS = [['light', '白'], ['dark', '暗'], ['checker', '格子']];
   let view = Object.assign({fit: true, zoom: 1, bg: 0}, vscode.getState()?.view);
   let natural = null; // the SVG's own width/height (px)
+  let shownFile = null; // the source of the SVG on the stage
 
   function applyView() {
     stage.classList.toggle('fit', view.fit);
@@ -105,12 +106,15 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
     if (msg.kind === 'building') { state.textContent = '描いている…'; state.classList.remove('stale'); return; }
     if (msg.kind === 'error') {
       error.textContent = msg.message; error.classList.add('shown');
+      // the drawing on the stage is of another source: never show it under this one's title
+      if (shownFile !== msg.file) { stage.innerHTML = ''; natural = null; shownFile = null; }
       const has = !!stage.querySelector('svg');
       state.textContent = has ? '古い図（今のソースは描けない）' : '描けない'; state.classList.add('stale');
       return;
     }
     error.classList.remove('shown');
     stage.innerHTML = msg.svg; // scripts inserted by innerHTML never run; the CSP blocks the rest
+    shownFile = msg.file;
     const svg = stage.querySelector('svg');
     const vb = svg?.viewBox?.baseVal;
     natural = svg ? {w: parseFloat(svg.getAttribute('width')) || vb?.width || 800, h: parseFloat(svg.getAttribute('height')) || vb?.height || 600} : null;

@@ -25,8 +25,7 @@
     "workspaceContains:**/.svg-diagram.json",
     "onLanguage:typescript",
     "onLanguage:javascript",
-    "onWebviewPanel:svgDiagram.preview",
-    "onCommand:workbench.action.tasks.runTask"
+    "onWebviewPanel:svgDiagram.preview"
   ],
   "contributes": {
     "commands": [
