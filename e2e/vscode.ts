@@ -1,9 +1,11 @@
-// Starts a real VS Code (downloaded by @vscode/test-electron) with this extension, driven by Playwright.
+// Starts a real VS Code (downloaded by @vscode/test-electron) with this extension, driven by Playwright over CDP.
 // Linux without a display (this machine) uses Chromium's headless Ozone; CI runs under xvfb, macOS has a screen.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {_electron, type ElectronApplication, type FrameLocator, type Page} from '@playwright/test';
+import {type ChildProcess, spawn} from 'node:child_process';
+import net from 'node:net';
+import {type Browser, chromium, type FrameLocator, type Page} from '@playwright/test';
 import {downloadAndUnzipVSCode} from '@vscode/test-electron';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
@@ -25,70 +27,109 @@ const SETTINGS = {
 };
 
 export interface VsCode {
-  app: ElectronApplication;
+  browser: Browser;
   win: Page;
   close(): Promise<void>;
 }
 
-export async function launch(opts: {open: string[]; videoDir?: string; debugDir?: string}): Promise<VsCode> {
+/**
+ * Starts VS Code with a DevTools port and connects Playwright to it over CDP. (Playwright's `_electron.launch` attaches
+ * to the window before it navigates; on CI runners it then never saw the workbench load. Connecting over CDP to the
+ * running app is what works there.) `traceDir`: a Playwright trace (snapshots of every step) is written there on close.
+ */
+export async function launch(opts: {open: string[]; traceDir?: string; debugDir?: string}): Promise<VsCode> {
   const version = process.env['VSCODE_VERSION'] ?? 'stable';
   const executablePath = await downloadAndUnzipVSCode(version);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'svgd-e2e-'));
   fs.mkdirSync(path.join(tmp, 'user', 'User'), {recursive: true});
   fs.writeFileSync(path.join(tmp, 'user', 'User', 'settings.json'), JSON.stringify(SETTINGS, null, 2));
   const headless = process.platform === 'linux' && !process.env['DISPLAY'];
-  const app = await _electron.launch({
-    executablePath,
-    env: {...process.env, ...(process.env['E2E_TRACE'] ? {ELECTRON_ENABLE_LOGGING: '1', ELECTRON_ENABLE_STACK_DUMPING: '1'} : {})} as Record<string, string>,
-    args: [
-      ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=1280,800'] : []),
-      ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : []),
-      `--user-data-dir=${path.join(tmp, 'user')}`,
-      `--extensions-dir=${path.join(tmp, 'ext')}`,
-      '--disable-workspace-trust',
-      // no OS keyring on CI runners (no D-Bus secret service, a locked Keychain): VS Code waits for it at start.
-      // VS Code's own smoke tests start with the in-memory secret storage for the same reason.
-      '--use-inmemory-secretstorage',
-      ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
-      ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
-      '--disable-updates',
-      ...(process.env['E2E_TRACE'] ? ['--verbose', '--log=trace'] : []),
-      '--disable-experiments',
-      '--skip-welcome',
-      '--skip-release-notes',
-      '--disable-telemetry',
-      `--extensionDevelopmentPath=${ROOT}`,
-      ...opts.open,
-    ],
-    ...(opts.videoDir ? {recordVideo: {dir: opts.videoDir, size: {width: 1280, height: 800}}} : {}),
-    timeout: 120_000,
-  });
-  const win = await workbenchWindow(app, opts.debugDir);
-  // a fixed window size, so the editor, the preview beside it and the panel all have room (and screenshots compare)
-  await app.evaluate(({BrowserWindow}) => { for (const w of BrowserWindow.getAllWindows()) { w.unmaximize(); w.setContentSize(1280, 800); } });
-  await win.waitForFunction('window.innerWidth >= 1200', undefined, {timeout: 10_000}).catch(() => undefined);
-  return {
-    app,
-    win,
-    async close() {
-      await app.close().catch(() => undefined);
-      fs.rmSync(tmp, {recursive: true, force: true});
-    },
+  const port = await freePort();
+  const args = [
+    `--remote-debugging-port=${port}`,
+    ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=1280,800'] : []),
+    ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : []),
+    `--user-data-dir=${path.join(tmp, 'user')}`,
+    `--extensions-dir=${path.join(tmp, 'ext')}`,
+    '--disable-workspace-trust',
+    // no OS keyring on CI runners (no D-Bus secret service, a locked Keychain): as VS Code's own smoke tests do
+    '--use-inmemory-secretstorage',
+    ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
+    ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+    '--disable-updates',
+    '--disable-experiments',
+    '--skip-welcome',
+    '--skip-release-notes',
+    '--disable-telemetry',
+    ...(process.env['E2E_TRACE'] ? ['--verbose', '--log=trace'] : []),
+    `--extensionDevelopmentPath=${ROOT}`,
+    ...opts.open,
+  ];
+  const child = spawn(executablePath, args, {env: {...process.env, VSCODE_CLI: undefined, ELECTRON_RUN_AS_NODE: undefined}, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32'});
+  const log: string[] = [];
+  for (const stream of [child.stdout, child.stderr]) stream?.on('data', (b: Buffer) => { log.push(b.toString()); if (process.env['E2E_TRACE']) process.stderr.write(b); });
+
+  const kill = () => {
+    if (child.exitCode !== null || !child.pid) return;
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
   };
+  try {
+    const browser = await connect(port, child);
+    const win = await workbenchWindow(browser, opts.debugDir);
+    const context = win.context();
+    if (opts.traceDir) await context.tracing.start({screenshots: true, snapshots: true});
+    await win.setViewportSize({width: 1280, height: 800}).catch(() => undefined);
+    return {
+      browser,
+      win,
+      async close() {
+        if (opts.traceDir) await context.tracing.stop({path: path.join(opts.traceDir, 'trace.zip')}).catch(() => undefined);
+        await browser.close().catch(() => undefined);
+        kill();
+        fs.rmSync(tmp, {recursive: true, force: true});
+      },
+    };
+  } catch (e) {
+    if (opts.debugDir) { fs.mkdirSync(opts.debugDir, {recursive: true}); fs.writeFileSync(path.join(opts.debugDir, 'vscode.log'), log.join('')); }
+    kill();
+    throw e;
+  }
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const {port} = server.address() as net.AddressInfo;
+      server.close(() => resolve(port));
+    });
+    server.on('error', reject);
+  });
+}
+
+/** Waits for the DevTools endpoint, then connects. */
+async function connect(port: number, child: ChildProcess): Promise<Browser> {
+  const end = Date.now() + 120_000;
+  for (;;) {
+    if (child.exitCode !== null) throw new Error(`VS Code exited (code ${child.exitCode}) before its DevTools port opened`);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (res.ok) return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    } catch { /* not up yet */ }
+    if (Date.now() > end) throw new Error(`VS Code's DevTools port ${port} did not open within 120s`);
+    await new Promise(r => setTimeout(r, 300));
+  }
 }
 
 /**
- * The window with the workbench. Electron's first window is not always it (a splash / shared window can come first),
- * so every window is looked at until one has `.monaco-workbench`. When none does, each window's URL and a screenshot
- * go to `debugDir`, so a CI failure shows what was on screen.
+ * The page with the workbench. Every page of every context is looked at until one has `.monaco-workbench`; each probe
+ * has its own deadline. When none does, each page's URL and a screenshot go to `debugDir`.
  */
-async function workbenchWindow(app: ElectronApplication, debugDir?: string): Promise<Page> {
+async function workbenchWindow(browser: Browser, debugDir?: string): Promise<Page> {
   const t0 = Date.now();
-  const first = await app.firstWindow({timeout: 120_000});
-  console.log(`[e2e] first window after ${Date.now() - t0}ms: ${first.url()}`);
+  const pages = () => browser.contexts().flatMap(c => c.pages());
   for (const end = Date.now() + 120_000; Date.now() < end; await new Promise(r => setTimeout(r, 500))) {
-    for (const page of app.windows()) {
-      // each probe has its own deadline: a window that never loads must not hang the loop
+    for (const page of pages()) {
       const found = await Promise.race([page.locator('.monaco-workbench').count().catch(() => 0), new Promise<number>(r => setTimeout(() => r(0), 2000))]);
       if (found) {
         console.log(`[e2e] workbench after ${Date.now() - t0}ms`);
@@ -96,14 +137,13 @@ async function workbenchWindow(app: ElectronApplication, debugDir?: string): Pro
       }
     }
   }
-  const pages = app.windows();
-  const lines = pages.map((p, i) => `${i}: ${p.url()}`);
+  const lines = pages().map((p, i) => `${i}: ${p.url()}`);
   if (debugDir) {
     fs.mkdirSync(debugDir, {recursive: true});
     fs.writeFileSync(path.join(debugDir, 'windows.txt'), lines.join('\n') + '\n');
-    for (const [i, p] of pages.entries()) await p.screenshot({path: path.join(debugDir, `window-${i}.png`), timeout: 10_000}).catch(() => undefined);
+    for (const [i, p] of pages().entries()) await p.screenshot({path: path.join(debugDir, `window-${i}.png`), timeout: 10_000}).catch(() => undefined);
   }
-  throw new Error(`no VS Code window with the workbench after 120s; windows:\n${lines.join('\n')}`);
+  throw new Error(`no VS Code window with the workbench after 120s; pages:\n${lines.join('\n')}`);
 }
 
 /** Runs a command by its title from the command palette (F1 works on every platform). */

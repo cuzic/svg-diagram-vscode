@@ -25,8 +25,9 @@ jobs:
       - run: xvfb-run -a pnpm test:integration
       - run: pnpm exec vsce package --no-dependencies
 
-  # The extension in a real VS Code window, clicked through with Playwright (e2e/). Screenshots of every step, the
-  # video and the HTML report are uploaded as the artifact "e2e-<os>-<version>" (also when the run passes).
+  # The extension in a real VS Code window, clicked through with Playwright (e2e/). Screenshots of every step, a
+  # Playwright trace (npx playwright show-trace trace.zip) and the HTML report are uploaded as the artifact
+  # "e2e-<os>-<version>" (also when the run passes). E2E_TRACE=1 adds VS Code's verbose log to the job log.
   e2e:
     name: e2e (${{ matrix.os }}, VS Code ${{ matrix.vscode }})
     runs-on: ${{ matrix.os }}
@@ -37,8 +38,6 @@ jobs:
         vscode: ['1.100.0', stable] # the engines minimum, and the latest
     env:
       VSCODE_VERSION: ${{ matrix.vscode }}
-      DEBUG: pw:browser # the VS Code process's own output in the log
-      E2E_TRACE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,9 +53,9 @@ jobs:
           path: .vscode-test
           key: vscode-${{ runner.os }}-${{ matrix.vscode }}-${{ matrix.vscode == 'stable' && github.run_id || 'fixed' }}
           restore-keys: vscode-${{ runner.os }}-${{ matrix.vscode }}-
-      - name: e2e (Linux, headless Ozone — no DISPLAY)
+      - name: e2e (Linux, on a virtual display)
         if: runner.os == 'Linux'
-        run: env -u DISPLAY pnpm test:e2e
+        run: xvfb-run -a --server-args="-screen 0 1280x800x24" pnpm test:e2e
       - name: e2e (macOS)
         if: runner.os == 'macOS'
         run: pnpm test:e2e
