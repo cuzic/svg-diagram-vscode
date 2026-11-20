@@ -25,7 +25,8 @@
     "workspaceContains:**/.svg-diagram.json",
     "onLanguage:typescript",
     "onLanguage:javascript",
-    "onWebviewPanel:svgDiagram.preview"
+    "onWebviewPanel:svgDiagram.preview",
+    "onCommand:workbench.action.tasks.runTask"
   ],
   "contributes": {
     "commands": [
@@ -58,6 +59,21 @@
       {
         "command": "svgDiagram.showPreview",
         "title": "プレビューを開く",
+        "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.menu",
+        "title": "メニュー",
+        "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.typecheck",
+        "title": "型検査（typecheck）",
+        "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.setup",
+        "title": "この案件で svg-diagram を使えるようにする",
         "category": "svg-diagram"
       }
     ],
@@ -131,6 +147,30 @@
         "key": "ctrl+k v",
         "mac": "cmd+k v",
         "when": "svgDiagram.isSource && editorTextFocus"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "svg-diagram",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "typecheck"
+            ],
+            "description": "svg-diagram のサブコマンド"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "続けて渡す引数"
+          }
+        }
       }
     ]
   },

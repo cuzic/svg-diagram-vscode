@@ -77,3 +77,19 @@ suite('preview', () => {
     assert.match(m.message ?? '', /わざと壊した図/);
   });
 });
+
+suite('tasks and commands', () => {
+  test('a typecheck task is offered for the folder', async () => {
+    const tasks = await vscode.tasks.fetchTasks({type: 'svg-diagram'});
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0]?.definition['command'], 'typecheck');
+    assert.deepEqual(tasks[0]?.problemMatchers, ['$tsc']);
+  });
+
+  test('every contributed command is registered', async () => {
+    const ext = vscode.extensions.getExtension('cuzic.svg-diagram-vscode');
+    const contributed: string[] = ext?.packageJSON.contributes.commands.map((c: {command: string}) => c.command) ?? [];
+    const all = await vscode.commands.getCommands(true);
+    assert.deepEqual(contributed.filter(c => !all.includes(c)), []);
+  });
+});

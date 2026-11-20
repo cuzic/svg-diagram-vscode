@@ -2,7 +2,7 @@
 
 [svg-diagram](https://github.com/cuzic/svg-diagram) の図のソース（`diagrams/*.ts`、JSON spec）を、VS Code の中で書く・検査する・プレビューするための拡張。
 
-> 開発中（0.0.x）。今は検査（「問題」パネル）とライブプレビューまで。
+> 開発中（0.0.x）。Phase 1（検査・プレビュー・導入・型検査・ステータスバー）まで。JSON spec の Schema は core の PR 待ち。
 
 ## 方針
 
@@ -30,6 +30,15 @@
 - 描けなかったときは、前に描けた図を残したまま「古い図」と表示し、理由（throw した行など）を上に出す。
 - 表示: 幅に合わせる / 拡大・縮小 / 原寸、背景（白・暗・格子）。VS Code を再読み込みしても開き直す。
 - SVG は Webview に直接埋め込む（Phase 2 で、クリックしたノードからソースへ飛ぶため）。CSP でネットワークと、SVG 内のスクリプトは止めている。
+
+## 導入・型検査・ステータスバー
+
+- **「svg-diagram: この案件で svg-diagram を使えるようにする」**: lockfile から pnpm / yarn / bun / npm を選び、足りないもの（`svg-diagram`・`typescript`・`@types/node`）を `add -D` し、`package.json` の `"type": "module"` か `tsconfig.json` が無ければ `svg-diagram init` まで、見えるターミナルで実行する。実行前に、打つコマンドを見せて確認する。
+- **「svg-diagram: 型検査（typecheck）」**: `svg-diagram typecheck` をタスクとして走らせ、`$tsc` の problem matcher で「問題」パネルに出す。`tasks.json` にも書ける:
+
+      {"type": "svg-diagram", "command": "typecheck", "problemMatcher": "$tsc"}
+
+- **ステータスバー**: 図のソースかプレビューが前にあるときだけ、左下に `svg-diagram <版>` を出す（検査中は回る。CLI が無ければ警告色で「CLI なし」）。クリックでメニュー（プレビュー、検査、型検査、導入、CLI の場所、ログ）。
 
 ## 起動する条件
 
@@ -60,5 +69,5 @@ core を手元で変えながら試すときは、設定 `svgDiagram.cliPath` �
 4. `check --format json` → Problems パネル（済）
 5. ライブプレビュー（済）
 6. JSON spec の JSON Schema（core の PR が先）
-7. ステータスバー・`init` / `typecheck` のコマンド
+7. ステータスバー・`init` / `typecheck` のコマンド（済）
 8. 以降: ソース位置（core の ADR）、プレビュー ⇄ ソースのジャンプ、Quick Fix、Markdown、差分、AI 連携、公開
