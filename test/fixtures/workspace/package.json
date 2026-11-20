@@ -1,0 +1,8 @@
+{
+  "name": "svg-diagram-vscode-fixture",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "svg-diagram": "0.5.0"
+  }
+}

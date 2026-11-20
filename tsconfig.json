@@ -17,8 +17,21 @@
     "noPropertyAccessFromIndexSignature": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "types": ["node", "vscode", "mocha"],
-    "lib": ["es2023"]
+    "types": [
+      "node",
+      "vscode",
+      "mocha"
+    ],
+    "lib": [
+      "es2023"
+    ]
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts"
+  ],
+  "exclude": [
+    "test/fixtures"
+  ]
 }

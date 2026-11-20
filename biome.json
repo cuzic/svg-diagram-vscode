@@ -10,7 +10,8 @@
 			"src/**",
 			"scripts/**",
 			"test/**",
-			"*.mjs"
+			"*.mjs",
+			"!test/fixtures"
 		]
 	},
 	"formatter": {

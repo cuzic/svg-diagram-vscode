@@ -22,7 +22,9 @@
   "main": "./dist/extension.cjs",
   "activationEvents": [
     "workspaceContains:node_modules/svg-diagram/package.json",
-    "workspaceContains:**/.svg-diagram.json"
+    "workspaceContains:**/.svg-diagram.json",
+    "onLanguage:typescript",
+    "onLanguage:javascript"
   ],
   "contributes": {
     "commands": [
@@ -35,6 +37,16 @@
         "command": "svgDiagram.showCli",
         "title": "使う CLI の場所と版を表示",
         "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.checkFile",
+        "title": "この図を検査",
+        "category": "svg-diagram"
+      },
+      {
+        "command": "svgDiagram.checkWorkspace",
+        "title": "ワークスペースの図をすべて検査",
+        "category": "svg-diagram"
       }
     ],
     "configuration": {
@@ -45,8 +57,41 @@
           "default": "",
           "scope": "machine-overridable",
           "markdownDescription": "svg-diagram の CLI（`bin/svg-diagram`）の場所。空なら、案件の `node_modules/svg-diagram`、次に `PATH` を探す。相対パスはワークスペースのフォルダから、`~` はホーム。手元の core を試すときは `../svg-diagram/bin/svg-diagram` のように向ける。"
+        },
+        "svgDiagram.check.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "`svg-diagram check` の所見を「問題」パネルに出す。"
+        },
+        "svgDiagram.check.onSave": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "図のソース（`from 'svg-diagram'` を import している `.ts` / `.mts` / `.js` / `.mjs`）を保存したときに検査する。"
+        },
+        "svgDiagram.check.onOpen": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "図のソースを開いたときに検査する（まだ所見がないとき）。"
         }
       }
+    },
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "svgDiagram.checkFile",
+          "when": "resourceExtname =~ /\\.(m?ts|m?js)$/",
+          "group": "svg-diagram"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "svgDiagram.checkFile",
+          "when": "editorLangId =~ /^(typescript|javascript)$/"
+        }
+      ]
     }
   },
   "scripts": {

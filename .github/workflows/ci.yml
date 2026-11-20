@@ -18,6 +18,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build --production
+      # the fixture workspace runs the published core (npm, not part of this pnpm workspace)
+      - run: npm install --no-package-lock --no-audit --no-fund
+        working-directory: test/fixtures/workspace
       # VS Code itself is downloaded by @vscode/test-electron and needs a display
       - run: xvfb-run -a pnpm test:integration
       - run: pnpm exec vsce package --no-dependencies

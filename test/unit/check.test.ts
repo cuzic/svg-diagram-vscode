@@ -1,0 +1,107 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {test} from 'node:test';
+import {checkArgs, crashFinding, type Finding, findingMessage, isDiagramSource, parseCheckOutput, placeFinding} from '../../src/check.ts';
+
+const f = (over: Partial<Finding>): Finding => ({file: '/p/a.ts', rule: 'r', severity: 'warn', message: 'm', ...over});
+
+test('checkArgs asks for JSON', () => {
+  assert.deepEqual(checkArgs(['/p/a.ts', '/p/b.ts']), ['check', '--format', 'json', '/p/a.ts', '/p/b.ts']);
+});
+
+test('parseCheckOutput: files become absolute against cwd; the counts are kept', () => {
+  // the shape core prints (check-diagram.ts: {errors, warnings, findings})
+  const out = parseCheckOutput(JSON.stringify({errors: 1, warnings: 0, findings: [{file: 'broken.ts', rule: 'build-error', severity: 'error', message: 'boom'}, {file: '/abs/x.ts', rule: 'x', severity: 'info', message: 'i'}]}), '/work');
+  assert.equal(out.errors, 1);
+  assert.deepEqual(out.findings.map(x => x.file), [path.resolve('/work/broken.ts'), path.resolve('/abs/x.ts')]);
+});
+
+test('parseCheckOutput: not JSON / no findings throws with the start of the output', () => {
+  assert.throws(() => parseCheckOutput('Usage: svg-diagram check ...', '/w'), /JSON ではない: Usage/);
+  assert.throws(() => parseCheckOutput('', '/w'), /（空）/);
+  assert.throws(() => parseCheckOutput('{"ok":true}', '/w'), /findings がない/);
+});
+
+const src = [
+  "import {diagram, row, box} from 'svg-diagram';",
+  "export default diagram({title: '流れ'}).add(",
+  "  row(box({label: '受付'}), box({label: \"審査\"}), box({label: '審査'})),",
+  ');',
+].join('\n');
+
+test('placeFinding: a CLI line wins, from the first non-blank column', () => {
+  const p = placeFinding(f({line: 3}), src);
+  assert.deepEqual([p.line, p.start, p.approximate], [2, 2, false]);
+  assert.equal(p.end, src.split('\n')[2]?.length);
+});
+
+test('placeFinding: no line, the band label found once → on the label', () => {
+  const p = placeFinding(f({data: {band: '「受付」'}}), src);
+  assert.deepEqual([p.line, p.start, p.end, p.approximate], [2, 19, 21, true]);
+  assert.equal(src.split('\n')[2]?.slice(p.start, p.end), '受付');
+});
+
+test('placeFinding: a label that appears twice (or not at all) goes to the first line', () => {
+  for (const band of ['「審査」', '「無い」', '受付']) {
+    const p = placeFinding(f({data: {band}}), src);
+    assert.deepEqual([p.line, p.start, p.approximate], [0, 0, true], band);
+  }
+});
+
+test('placeFinding: an unreadable file still gets a 1-character place', () => {
+  assert.deepEqual(placeFinding(f({}), undefined), {file: '/p/a.ts', line: 0, start: 0, end: 1, approximate: true, finding: f({})});
+});
+
+test('findingMessage adds the fix when the CLI gives one', () => {
+  assert.equal(findingMessage(f({message: '幅が揃っていない', data: {fix: 'cols で揃える'}})), '幅が揃っていない\n直し方: cols で揃える');
+  assert.equal(findingMessage(f({message: 'x'})), 'x');
+});
+
+test('isDiagramSource: imports the DSL itself; not the browser entry, not .d.ts, not other files', () => {
+  assert.ok(isDiagramSource('a.ts', "import {diagram} from 'svg-diagram';"));
+  assert.ok(isDiagramSource('a.mjs', 'import {box} from "svg-diagram"'));
+  assert.ok(isDiagramSource('a.ts', "import type {X} from 'svg-diagram';\nconst {box} = await import('svg-diagram');"));
+  assert.ok(!isDiagramSource('a.ts', "import {renderInBrowser} from 'svg-diagram/browser';"));
+  assert.ok(!isDiagramSource('a.d.ts', "import {diagram} from 'svg-diagram';"));
+  assert.ok(!isDiagramSource('a.md', "import {diagram} from 'svg-diagram';"));
+  assert.ok(!isDiagramSource('a.ts', "import {x} from 'svg-diagram-extra';"));
+});
+
+// what core 0.5.0 prints when a source throws (check-diagram stops without JSON)
+const crashStderr = (file: string) => `(node:1) [DEP0205] DeprecationWarning: \`module.register()\` is deprecated.
+file://${file}:5
+  throw new Error('fixture: わざと壊した図');
+        ^
+
+Error: fixture: わざと壊した図
+    at define (file://${file}:5:9)
+    at loadDiagram (file:///x/node_modules/svg-diagram/dist/lib/load-source.js:32:55)
+
+Node.js v26.13.0
+`;
+
+test('crashFinding: the line of the source and the Error line', () => {
+  assert.deepEqual(crashFinding('/w/broken.ts', crashStderr('/w/broken.ts')), {file: '/w/broken.ts', line: 5, rule: 'build-error', severity: 'error', message: 'Error: fixture: わざと壊した図'});
+});
+
+test('crashFinding: thrown inside the library → the frame in the source; a path with Japanese is URL-encoded by Node', () => {
+  const file = '/w/図/a.ts';
+  const enc = '/w/%E5%9B%B3/a.ts';
+  const stderr = `file:///x/node_modules/svg-diagram/dist/lib/dsl.js:29
+        throw new Error(\`bad theme\`);
+
+Error: diagram({theme}) must be one of 1, 2
+    at diagram (file:///x/node_modules/svg-diagram/dist/lib/dsl.js:29:15)
+    at file://${enc}:4:16
+`;
+  const c = crashFinding(file, stderr);
+  assert.equal(c.line, 4);
+  assert.equal(c.message, 'Error: diagram({theme}) must be one of 1, 2');
+});
+
+test('crashFinding: nothing recognisable → first line, the last meaningful stderr line', () => {
+  const c = crashFinding('/w/a.ts', 'svg-diagram: Node v20 cannot run the TypeScript sources\n');
+  assert.equal(c.line, undefined);
+  assert.equal(c.message, 'svg-diagram: Node v20 cannot run the TypeScript sources');
+  assert.equal(crashFinding('/w/a.ts', '').message, 'check が JSON を出さずに失敗した');
+});
