@@ -1,8 +1,11 @@
 // Runs inside a real VS Code (pnpm test:integration; CI runs it under xvfb).
 import * as assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import * as vscode from 'vscode';
+import {resolveCli} from '../../src/cli.ts';
+import {PreviewManager} from '../../src/preview.ts';
 
 const locationCli = 'finding-locations-cli.sh';
 
@@ -74,7 +77,7 @@ async function withLocationCli(run: (base: vscode.Uri) => Promise<void>): Promis
 }
 
 suite('check → Problems', () => {
-  // test/fixtures/workspace has svg-diagram 0.8.0 (the GitHub release tarball) in node_modules (CI: npm install there before the run)
+  // test/fixtures/workspace has svg-diagram 0.9.0 (the GitHub release tarball) in node_modules (CI: npm install there before the run)
   const folder = () => vscode.workspace.workspaceFolders?.[0]?.uri;
 
   async function diagnosticsOf(name: string, timeoutMs = 60_000): Promise<vscode.Diagnostic[]> {
@@ -100,8 +103,8 @@ suite('check → Problems', () => {
     const [d] = await diagnosticsOf('broken.diagram.ts');
     assert.equal(d?.code, 'build-error');
     assert.equal(d?.severity, vscode.DiagnosticSeverity.Error);
-    // core 0.8.0 reports it in its JSON, without a line (0.5.0 crashed, and the line came from the stack): the first line
-    assert.equal(d?.range.start.line, 0);
+    // Core 0.9.0 includes the position of the throw in its JSON.
+    assert.equal(d?.range.start.line, 4);
     assert.match(d?.message ?? '', /わざと壊した図/);
   });
 
@@ -137,6 +140,55 @@ suite('check → Problems', () => {
 });
 
 suite('preview', () => {
+  test('the core location map reveals a connector in the source editor beside the preview', async function () {
+    this.timeout(60_000);
+    const base = locationFixture();
+    const uri = vscode.Uri.joinPath(base, 'preview-links.diagram.ts');
+    const {cli} = resolveCli({folder: base.fsPath, env: {}});
+    assert.equal(cli?.version, '0.9.0');
+    const document = await vscode.workspace.openTextDocument(uri);
+    const start = new vscode.Range(0, 0, 0, 0);
+    await vscode.window.showTextDocument(document, {viewColumn: vscode.ViewColumn.One, selection: start});
+    const log = vscode.window.createOutputChannel('svg-diagram preview test', {log: true});
+    const scratch = vscode.Uri.file(fs.mkdtempSync(path.join(os.tmpdir(), 'svgd-preview-test-')));
+    const viewType = 'svgDiagram.preview.test';
+    const manager = new PreviewManager({getCli: () => cli, log, scratchDir: scratch}, viewType);
+    const panel = vscode.window.createWebviewPanel(viewType, 'Preview test', vscode.ViewColumn.Two);
+    try {
+      await manager.deserializeWebviewPanel(panel, {last: {file: uri.fsPath}});
+      // Use a real webview to send the command for the map entry that arrived; Playwright covers the physical click.
+      panel.webview.html = `<!doctype html>
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-reveal-test'">
+      <script nonce="reveal-test">
+        const vscode = acquireVsCodeApi();
+        window.addEventListener('message', ({data}) => {
+          const connector = data.kind === 'svg' && data.map?.connects[0];
+          if (connector) vscode.postMessage({kind: 'reveal', build: data.build, id: connector.id});
+        });
+        vscode.postMessage({kind: 'ready'});
+      </script>`;
+      const expected = new vscode.Range(8, 4, 8, 11);
+      for (const end = Date.now() + 30_000; Date.now() < end; await new Promise(r => setTimeout(r, 100))) {
+        const editor = vscode.window.activeTextEditor;
+        if (editor?.document !== document || !editor.selection.isEqual(expected)) continue;
+        const message = manager.lastMessage;
+        assert.ok(message?.kind === 'svg' && message.map);
+        assert.ok(message.map.parts.some(p => p.label === 'Start'));
+        assert.equal(message.map.connects.length, 1);
+        assert.equal(document.getText(editor.selection), 'connect');
+        assert.equal(editor.viewColumn, vscode.ViewColumn.One);
+        assert.equal(panel.viewColumn, vscode.ViewColumn.Two);
+        assert.equal(panel.visible, true);
+        return;
+      }
+      assert.fail(`the preview did not select connect() in the fixture (last message: ${manager.lastMessage?.kind})`);
+    } finally {
+      manager.dispose();
+      log.dispose();
+      fs.rmSync(scratch.fsPath, {recursive: true, force: true});
+    }
+  });
+
   type Msg = {kind: string; svg?: string; message?: string; file?: string};
   async function previewOf(name: string, want: string): Promise<Msg> {
     const base = vscode.workspace.workspaceFolders?.[0]?.uri;

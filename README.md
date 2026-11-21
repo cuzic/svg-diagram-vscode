@@ -29,7 +29,7 @@
 - error → エラー、warn → 警告、info → 情報。コードはルール名（`a11y-no-title` など）。CLI が直し方（`data.fix`）を返すときは、メッセージの 2 行目に出す。
 - core が行と桁を返すと、部品を呼び出した行の関数名に波線が付く。呼び出し元や重なりの相手の位置は「問題」パネルの関連情報に出る。共通部品など別のファイルに指摘箇所があるときは、図のソースの 1 行目に波線が付き、関連情報から指摘箇所へ移動できる。
 - 行だけを返す所見は、その行に波線が付く。位置のない所見は、帯の見出し（`data.band`）がソースの文字列に 1 回だけ現れればそこに、なければ 1 行目に付く。
-- ソースが throw したときは `build-error`。core 0.8.0 の JSON には位置が無いので 1 行目に付く。core 0.5.0 以前は stderr のスタックから throw した行に付ける。
+- ソースが throw したときは `build-error`。core 0.9.0 は JSON で throw した位置を返す。core 0.8.0 の JSON には位置が無いので 1 行目に付く。core 0.5.0 以前は stderr のスタックから throw した行に付ける。
 - コマンド: 「svg-diagram: この図を検査」「svg-diagram: ワークスペースの図をすべて検査」。
 - 設定: `svgDiagram.check.enabled` / `check.onSave` / `check.onOpen`（どれも既定 true）。
 
@@ -37,7 +37,7 @@
 
 `.svg-diagram.json`・`site.json`・デッキ（`deck.json`・`deck-*.json`・`*.deck.json`）を開くと、VS Code の JSON の補完・説明・誤りの表示が効く。部品の `type` は全種類から選べ、選ぶと説明と例のひな形が出る。`node_modules` の下のファイルは対象外。
 
-- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今はリリースの tarball から入れる: `pnpm add -D https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz`（ビルド不要。npm でも同じ URL）。「この案件で svg-diagram を使えるようにする」は npm から入れるので 0.5.0 になり、JSON は検査しない。
+- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今はリリースの tarball から入れる: `pnpm add -D https://github.com/cuzic/svg-diagram/releases/download/v0.9.0/svg-diagram-0.9.0.tgz`（ビルド不要。npm でも同じ URL）。「この案件で svg-diagram を使えるようにする」は npm から入れるので 0.5.0 になり、JSON は検査しない。
 - 案件の svg-diagram は、そのファイルから上の、ワークスペースフォルダの中の `node_modules/svg-diagram`。設定 `svgDiagram.cliPath`（ワークスペース・フォルダの設定）があればそれ。`PATH` の svg-diagram、ユーザー設定の `svgDiagram.cliPath`、フォルダの外の `node_modules` のものは、そのファイルから上に `.svg-diagram.json` があるときだけ使う（なければ、案件の `node_modules` のもの）。
 - **ウィンドウで 1 つの JSON Schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。開いている対象の JSON ファイル（`site.json`・デッキ・`.svg-diagram.json`）の案件の svg-diagram が、みな同じ schema のとき（同じ core を別のパスから使う pnpm のモノレポ、同じ版を入れた別のフォルダも同じ）に、それで検査する。svg-diagram と関係ない案件のファイルや、schema の違う svg-diagram の案件のファイルが一緒に開いているときは、どれも検査しない（関係ないファイルに誤りを出さないため。どちらかを閉じると検査する。ほかの拡張がタブなしで読んだファイルは、数分で閉じられる）。git の差分の片側のようにファイルでないものは、そのパスのファイルとして数える（ワークスペースの外のパスなら、どの案件か分からないので検査しない）。どれも開いていなければ、svg-diagram のあるワークスペースフォルダがみな同じ schema のとき、それ。
 - 関係ない案件のファイルを開いた直後の一瞬（0.1 秒ほど）、svg-diagram の誤りが出てから消えることがある（VS Code が先に検査するため）。
@@ -57,7 +57,8 @@
 - プレビューは 1 枚で、アクティブなエディタの図のソースに付いていく。
 - 描けなかったときは、前に描けた図を残したまま「古い図」と表示し、理由（throw した行など）を上に出す。失敗箇所が別のファイルにあるときは、ワークスペースフォルダからの相対パスと行・桁を表示する。フォルダの外なら絶対パスを表示する。
 - 表示: 幅に合わせる / 拡大・縮小 / 原寸、背景（白・暗・格子）。VS Code を再読み込みしても開き直す。
-- SVG は Webview に直接埋め込む（Phase 2 で、クリックしたノードからソースへ飛ぶため）。CSP でネットワークと、SVG 内のスクリプトは止めている。
+- core 0.9.0 など `build --locations` に対応した CLI では、部品や接続線にマウスを置くと枠や線が強調される。クリックすると保存済みのソースで、その部品や接続を書いた位置を選ぶ。ドラッグでは移動しない。描いた後にソースを編集すると、移動時に「保存前の位置です」と表示する。
+- SVG は Webview に直接埋め込む。CSP でネットワークと SVG 内のスクリプトを止めている。
 
 ## 導入・型検査・ステータスバー
 
@@ -82,7 +83,7 @@
     pnpm install
     pnpm build          # dist/extension.cjs（--watch で監視）
     pnpm typecheck && pnpm lint && pnpm test
-    (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.8.0（GitHub のリリースの tarball）
+    (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.9.0（GitHub のリリースの tarball）
     pnpm test:integration   # 本物の VS Code を落として動かす（画面が要る。CI では xvfb-run）
     pnpm test:e2e       # 本物の VS Code の画面を Playwright で操作する（下）
     pnpm package        # .vsix を作る
@@ -93,7 +94,7 @@
 
 - CI は {Ubuntu（xvfb）, macOS} × {VS Code 1.100.0（engines の下限）, stable} で走らせ、スクリーンショット・trace・HTML レポートを artifact「e2e-<os>-<版>」に上げる（通ったときも）。
 - 手元の Linux で画面がないときは Chromium の headless（`--ozone-platform=headless`）で動く。`VSCODE_VERSION=1.100.0 pnpm test:e2e` で版を選べる。
-- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.8.0。GitHub のリリースの tarball）。
+- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.9.0。GitHub のリリースの tarball）。
 - テストの実行プロセスを kill -9 したときは VS Code が残る（別のプロセスグループで起動するため）: `pkill -f svgd-e2e-`。
 
 VS Code で開いて F5（「拡張を起動」）を押すと、`test/fixtures/workspace` を開いた別ウィンドウで拡張が動く。

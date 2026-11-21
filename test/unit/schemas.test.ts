@@ -51,7 +51,7 @@ test('a core older than 0.8.0 or none: everything is accepted, and the log says 
   const old = rootFor({cli: core(path.join(tmp, 'node_modules', 'svg-diagram'), {schema: false, version: '0.5.0'}), from: tmp, folder: tmp});
   assert.equal(old.dir, undefined);
   assert.equal(schemaText(old, 'site.schema.json'), ACCEPT_ALL);
-  assert.match(old.reason ?? '', /0\.5\.0.*JSON Schema が無い.*releases\/download\/v0\.8\.0\/svg-diagram-0\.8\.0\.tgz/);
+  assert.match(old.reason ?? '', /0\.5\.0.*JSON Schema が無い.*releases\/download\/v0\.9\.0\/svg-diagram-0\.9\.0\.tgz/);
   assert.match(rootFor({from: tmp}).reason ?? '', /見つからない/);
 });
 
@@ -150,6 +150,6 @@ test('sameRoot: what is served; a core upgraded in place is new, and accept-all 
   assert.ok(sameRoot(rootFor({}), {reason: 'another reason'}));
 });
 
-test('CORE_TARBALL is the v0.8.0 release asset', () => {
-  assert.equal(CORE_TARBALL, 'https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz');
+test('CORE_TARBALL is the v0.9.0 release asset', () => {
+  assert.equal(CORE_TARBALL, 'https://github.com/cuzic/svg-diagram/releases/download/v0.9.0/svg-diagram-0.9.0.tgz');
 });

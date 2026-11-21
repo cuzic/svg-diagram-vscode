@@ -1,8 +1,9 @@
 // End-to-end: the extension in a real VS Code window, clicked through like a user would.
 // Each step leaves a screenshot in the report (CI uploads them with a Playwright trace).
+import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 import {expect, type Page, test, type TestInfo} from '@playwright/test';
-import {activeTab, FIXTURE, launch, openFile, previewFrame, runCommand, type VsCode} from './vscode.ts';
+import {activeTab, FIXTURE, launch, openFile, previewFrame, ROOT, runCommand, type VsCode} from './vscode.ts';
 
 test.describe.configure({mode: 'serial'});
 
@@ -11,6 +12,8 @@ let win: Page;
 
 test.beforeAll(async ({}, info) => {
   info.setTimeout(420_000); // downloading VS Code (~400 MB) on a cold CI cache, then its first start
+  // Exercise the same minified webview script that ships in the VSIX.
+  execFileSync(process.execPath, ['scripts/build.ts', '--production'], {cwd: ROOT, stdio: 'inherit'});
   vscode = await launch({open: [FIXTURE, path.join(FIXTURE, 'untitled.diagram.ts')], traceDir: info.outputPath('trace'), debugDir: info.outputPath('launch')});
   win = vscode.win;
 });
@@ -36,7 +39,7 @@ function whileDrawing(page: ReturnType<typeof previewFrame>) {
       title: doc.getElementById('title')?.textContent,
       state: doc.getElementById('state')?.textContent,
       banner: !!doc.getElementById('error')?.classList.contains('shown'),
-      figure: !!doc.querySelector('#stage svg'),
+      figure: !!doc.querySelector('#stage > svg'),
     };
   });
 }
@@ -45,7 +48,7 @@ const statusItem = () => win.locator('.statusbar-item', {hasText: /svg-diagram/}
 
 test('the status bar shows the CLI version for a diagram source', async ({}, info) => {
   await expect(activeTab(win, 'untitled.diagram.ts')).toBeVisible();
-  await expect(statusItem()).toContainText('svg-diagram 0.8.0', {timeout: 60_000});
+  await expect(statusItem()).toContainText('svg-diagram 0.9.0', {timeout: 60_000});
   await shot(info, '1-status-bar');
 });
 
@@ -64,17 +67,17 @@ test('the editor title has the preview button', async () => {
 test('the preview draws the SVG', async ({}, info) => {
   await runCommand(win, 'svg-diagram: プレビューを横に開く');
   const page = previewFrame(win);
-  await expect(page.locator('#stage svg')).toBeVisible({timeout: 60_000});
+  await expect(page.locator('#stage > svg')).toBeVisible({timeout: 60_000});
   await expect(page.locator('#state')).toContainText('に描いた');
   await expect(page.locator('#title')).toHaveText('untitled.diagram.ts');
-  const box = await page.locator('#stage svg').boundingBox();
+  const box = await page.locator('#stage > svg').boundingBox();
   expect(box && box.width > 100 && box.height > 10).toBeTruthy();
   await shot(info, '3-preview');
 });
 
 test('zoom and background buttons work', async ({}, info) => {
   const page = previewFrame(win);
-  const width = async () => (await page.locator('#stage svg').boundingBox())?.width ?? 0;
+  const width = async () => (await page.locator('#stage > svg').boundingBox())?.width ?? 0;
   await page.locator('#actual').click();
   await expect(page.locator('#actual')).toHaveText('100%');
   const at100 = await width();
@@ -90,12 +93,73 @@ test('zoom and background buttons work', async ({}, info) => {
   await page.locator('#bg').click();
 });
 
+test('box and connector clicks reveal source at fit and 200%, while a drag keeps the selection', async ({}, info) => {
+  const name = 'preview-links.diagram.ts';
+  await openFile(win, name);
+  const page = previewFrame(win);
+  const svg = page.locator('#stage > svg');
+  await expect(page.locator('#title')).toHaveText(name);
+  await expect(svg.locator('title').first()).toHaveText('Preview links');
+  const fit = page.locator('#fit');
+  await expect(fit).toHaveAttribute('aria-pressed', 'true');
+
+  const svgWidth = Number(await svg.getAttribute('width'));
+  const svgHeight = Number(await svg.getAttribute('height'));
+  const position = async (x: number, y: number) => {
+    const bounds = await svg.boundingBox();
+    if (!bounds) throw new Error('the fixture SVG has no screen bounds');
+    return {bounds, point: {x: x * bounds.width / svgWidth, y: y * bounds.height / svgHeight}};
+  };
+  const selection = (line: number, length: number) =>
+    expect(win.locator('.statusbar-item').filter({hasText: new RegExp(`Ln ${line}, Col \\d+.*\\b${length} selected`)})).toBeVisible();
+
+  for (const zoom of ['fit', '200%']) {
+    if (zoom === '200%') {
+      await page.locator('#actual').click();
+      // Zoom buttons use 1.25× steps. Size the SVG exactly as applyView does for a 2× zoom.
+      await svg.evaluate((element, {width, height}) => {
+        const {style} = element as unknown as {style: {width: string; height: string}};
+        style.width = `${width}px`;
+        style.height = `${height}px`;
+      }, {width: 2 * svgWidth, height: 2 * svgHeight});
+      expect((await svg.boundingBox())?.width).toBe(2 * svgWidth);
+    }
+    // The core fixture has its first box around (52, 46) and the connector in the gap at (110, 46.5).
+    const box = await position(52, 40);
+    await svg.hover({position: box.point});
+    await expect(page.getByRole('tooltip')).toHaveText('box · Start');
+    await expect(svg.locator('.hit-outline > rect')).toHaveCount(1);
+    await svg.click({position: box.point});
+    await selection(6, 3);
+
+    const connector = await position(110, 46.5);
+    await svg.hover({position: connector.point});
+    await expect(page.getByRole('tooltip')).toHaveText('connect');
+    await expect(svg.locator('.hit-outline > path')).toHaveCount(1);
+    await svg.click({position: connector.point});
+    await selection(9, 7);
+
+    const {bounds, point} = await position(52, 40);
+    const x = bounds.x + point.x;
+    const y = bounds.y + point.y;
+    await win.mouse.move(x, y);
+    await win.mouse.down();
+    await win.mouse.move(x + 8, y, {steps: 4});
+    await win.mouse.move(x, y, {steps: 4});
+    await win.mouse.up();
+    await runCommand(win, 'View: Focus First Editor Group');
+    await selection(9, 7);
+    await shot(info, `preview-links-${zoom}`);
+  }
+  await fit.click();
+});
+
 test('a source that throws: the preview says why, the Problems panel has the build-error', async ({}, info) => {
   await openFile(win, 'broken.diagram.ts');
   const page = previewFrame(win);
   await expect(page.locator('#title')).toHaveText('broken.diagram.ts', {timeout: 60_000});
   await expect(page.locator('#error')).toContainText('わざと壊した図', {timeout: 60_000});
-  await expect(page.locator('#stage svg')).toHaveCount(0); // not the other file's drawing
+  await expect(page.locator('#stage > svg')).toHaveCount(0); // not the other file's drawing
   await expect(page.locator('#error')).not.toContainText('/broken.diagram.ts:'); // the title names the file already
   await runCommand(win, 'View: Focus Problems (Errors, Warnings, Infos)');
   await expect(win.locator('.markers-panel')).toContainText('build-error', {timeout: 60_000});
@@ -112,7 +176,7 @@ test('while another file is drawing, the last file\'s error banner is down', asy
   const now = await whileDrawing(page);
   expect(now).toEqual({title: 'slow.diagram.ts', state: '描いている…', banner: false, figure: false});
   await shot(info, '6-building-after-error');
-  await expect(page.locator('#stage svg')).toBeVisible({timeout: 60_000});
+  await expect(page.locator('#stage > svg')).toBeVisible({timeout: 60_000});
 });
 
 test('while another file is drawing, the last file\'s figure is not shown under its title', async ({}, info) => {
@@ -125,7 +189,7 @@ test('while another file is drawing, the last file\'s figure is not shown under 
   const now = await whileDrawing(page);
   expect(now).toEqual({title: 'slow.diagram.ts', state: '描いている…', banner: false, figure: false});
   await shot(info, '7-building-after-figure');
-  await expect(page.locator('#stage svg')).toBeVisible({timeout: 60_000});
+  await expect(page.locator('#stage > svg')).toBeVisible({timeout: 60_000});
   await expect(page.locator('#error')).toBeHidden();
 });
 
