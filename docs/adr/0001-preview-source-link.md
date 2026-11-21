@@ -1,6 +1,6 @@
 # ADR 0001: プレビューの図をクリックして、ソースのその部品へ飛ぶ
 
-- 状態: 起草(2026-11-21。Opus のレビュー 1 回目(`0001-opus-review-round1.md`)の Major 3・Minor 5・nit 2 を反映)
+- 状態: 決定(2026-11-21。Opus のレビュー 1 回目(`0001-opus-review-round1.md`)の Major 3・Minor 5・nit 2 を反映。2 回目(`0001-opus-review-round2.md`)で Blocker・Major なしで収束し、その Minor 4・nit 2 を反映)
 - 関連: core の ADR 0072(D6 の位置の地図 `build --locations`、D1・D3 の位置の形と選び方)、この拡張の Phase 2
 
 ## 背景
@@ -21,16 +21,18 @@ core 0.9.0 から `build --locations FILE` が、部品と接続ごとに SVG �
 
 **D1. 地図は、`--locations` を知っている core のときだけ作る。** 版の数字では決めない(`cliPath` で core の checkout を指すと、`package.json` は 0.5.0 のまま `--locations` を持つ)。
 
-- CLI を、ソースを渡さずに `build` だけで 1 回走らせ、使い方の文に `--locations` があるかを見る(0.9.0 は終了コード 2 で使い方を出す)。結果は CLI のパスとその更新時刻ごとに覚える。
+- CLI を、ソースを渡さずに `build` だけで 1 回走らせ、使い方の文に `--locations` があるかを見る(0.9.0 は終了コード 2 で使い方を出す。0.4.0〜0.8.0 も使い方を出すだけで何も書かない)。
+- 結果はメモリにだけ、**CLI のパッケージのルート・その `package.json` の版・`build-diagram`(`dist/build-diagram.js` か `build-diagram.ts`)の更新時刻**ごとに覚える。bin の更新時刻では覚えない(`--locations` は bin でなく `build-diagram` にあり、checkout の `git pull` で bin は変わらない)。時間切れや起動の失敗は覚えない(次の描きでまた調べる)。
 - あれば `buildArgs` に `--locations <scratch>/<name>.locations.json` を足す。無い・調べられないなら足さない(今のとおり描くだけ。クリックは効かない)。
 
 **D2. 地図は SVG と一緒にページへ送り、描いた回の番号で結ぶ。**
 
-- `PreviewManager` は描くたびに番号 `build`(1 つずつ増やす)を振る。`ToPage` の `svg` に `build` と `map?: PreviewMap` を足す。
+- `PreviewManager` は描くたびに印 `build` を振る。拡張の起動ごとの乱数と、1 つずつ増やす数をつないだ文字列(再読み込みのあとに、前の起動の図の印が新しい表に当たらないように)。`ToPage` の `svg` に `build` と `map?: PreviewMap` を足す。
 - 拡張は、**最後に送った `svg` の回の表だけ**を持つ(`build` と、部品ごとの `loc`・`via` の配列)。
 - ページへは次だけを送る(ページはファイルのパスを知らない):
-  - 部品ごとに `{id, kind, label?, rect}`、接続ごとに `{id, kind: 'connect', segments}`。`id` は配列の番号。
+  - 部品ごとに `{id, kind, label?, rect}`、接続ごとに `{id, kind: 'connect', segments}`。`id` は部品と接続で**1 つの通し番号**(部品が `0..P-1`、接続が `P..`)。拡張の表も同じ番号で引く。
   - `final: false` の部品・接続は落とす(最後の図に出ない)。`label` は、`generated: true` の物と `(band)` のような中の名前では送らない(ツールチップは `kind` だけ)。
+- ページへ新しくパスを送らない(今の `svg`・`building`・`error` の `file` は、題名と切り替えの判定のためにそのまま)。
 - 地図が読めない、`version` が 1 でない、`width`/`height` が SVG と合わないときは、`map` を送らず表も空にする(クリックは効かない。誤った所へ飛ぶより良い)。
 - **描けなかった回**: ページは古い図を残す(「古い図」)。そこで、落ちた回の地図は表を**置き換えない**。古い図には古い表のまま。落ちた回の地図の `issues` は D6 の帯にだけ使う。
 - 別のソースに切り替えたとき、表を空にする(新しい `svg` が来るまでクリックは効かない)。
@@ -42,7 +44,8 @@ core 0.9.0 から `build --locations FILE` が、部品と接続ごとに SVG �
   1. 接続: 点から `segments` のどれかまでの距離が、画面で 5px 以内。接続の `rect` では当てない(線の外接の四角は、箱や `group` の題名を覆う。レビュー 1 回目 M1)。いくつも当たれば、距離の近い方、同じなら後の物。
   2. 部品: 点が `rect` の中。いくつも当たれば、面積の小さい方、同じなら後の物(`group` の中の箱は、面積で `group` より先に当たる)。
   3. 接続が当たれば接続、なければ部品。見出しだけを押したときは、下の部品になる(core に見出しの四角が無いため。要れば core に頼む)。
-- `hitTest` は外の名前を使わない 1 つの関数にする(`String(hitTest)` でページに埋めても、本番の圧縮のあとでも動くように)。単体テストは、関数そのものと、`previewShellHtml` に埋めた文字列を `node:vm` で評価した物の両方で回す。
+- `hitTest` は外の名前を使わない 1 つの関数にし、ページには `const hitTest = (${String(hitTest)});` の形で埋める(本番の圧縮で関数の名前が変わっても、ページの名前は変わらない。`String(hitTest)` をそのまま埋めると、本番だけ ReferenceError になる。レビュー 2 回目 m1)。
+- 単体テストは、関数そのものと、`previewShellHtml` に埋めた文字列を `node:vm` で評価した物で回す。後者は、esbuild で本番と同じ設定(`minify: true`)にかけた `preview-html` から作った物でも回す。
 
 **D4. 操作。**
 
@@ -60,14 +63,14 @@ core 0.9.0 から `build --locations FILE` が、部品と接続ごとに SVG �
 
 **D6. 描けなかったときの帯も、位置へ飛べるようにする(U2)。**
 
-- 落ちた回の地図があり、`issues` が**空でない**ときだけ、帯の各行を `issues` から作る。それ以外(地図が無い: 読み込み・構文・`diagram()` の設定の誤りでは core は地図を消す。`issues: []`: SVG が XML として壊れているとき)は、今の `buildErrorText`。
+- 落ちた回の地図があり、`issues` が**空でない**ときだけ、帯の各行を `issues` から作る。`error` の知らせに `build`(その回の印)と行の並び `issues: [{text, id?}]` を足す(`id` は位置のある行だけ)。拡張は、D2 の図の表とは別に、**最後に落ちた回**の `issues` の表をその印で持つ(図の表は置き換えない)。それ以外(地図が無い: 読み込み・構文・`diagram()` の設定の誤りでは core は地図を消す。`issues: []`: SVG が XML として壊れているとき)は、今の `buildErrorText`。
 - `issues[i]` の形: `{file, rule, severity, message, line?, column?, location?: {file, line, column}, via?, related?: [{file, line, column}]}`(core の `lib/layout-issues.ts`)。`line`/`column` は `file`(地図のディレクトリからの相対)の中、`location` は別のファイル。どれも地図のディレクトリから絶対パスにする。
-- 位置のある行を押すと、`{kind: 'revealIssue', build, index}` で D4 と同じく開く(落ちた回の `build` の番号で、その回の `issues` を引く)。
+- 位置のある行を押すと、`{kind: 'revealIssue', build, id}` で D4 と同じく開く(落ちた回の印と同じときだけ、その表で引く)。
 
 **D7. ソースから図へ(後でよい)。** エディタのカーソルの行が、部品の `loc`(か `via`)の行と同じなら、その部品の枠をプレビューで光らせる。同じ `loc` の部品はまとめて光る。U3 にし、U1・U2 を使ってみてから決める。
 
 **D8. 安全。** 地図は拡張が作業用フォルダに書かせた物だけを読む。ページへ送るのは番号・種類・見出し・座標だけで、見出しは `textContent` で入れる。
-ページから来る `reveal` は数(`build`・`id`)だけで、拡張は整数と範囲を確かめてから自分の配列で引く(ページがパスやコマンドを指定できない)。CSP は変えない。
+ページから来る `reveal` は印(`build`)と数(`id`)だけで、拡張は整数と範囲を確かめてから自分の配列で引く(ページがパスやコマンドを指定できない)。CSP は変えない。
 
 ## やらないこと
 
@@ -78,10 +81,10 @@ core 0.9.0 から `build --locations FILE` が、部品と接続ごとに SVG �
 ## 実装の順
 
 - **U1**: D1〜D5、D8。
-  - 単体: `--locations` の調べ(使い方の文の有無・覚える・偽の CLI)と `buildArgs`、地図の絞り込み(`final: false` を落とす・中の名前を送らない・合わない地図を捨てる・パスを送らない)、`hitTest`(接続の外接の四角が箱や題名を覆う例・距離・面積・倍率。関数と埋めた文字列の両方)、位置の絶対パス、`reveal` の受け付け(番号の違い・整数でない・範囲の外)、落ちた回が表を置き換えないこと。
+  - 単体: `--locations` の調べ(使い方の文の有無・覚える鍵・`build-diagram` が変われば調べ直す・時間切れは覚えない・偽の CLI)と `buildArgs`、地図の絞り込み(`final: false` を落とす・中の名前を送らない・合わない地図を捨てる・パスを送らない)、`hitTest`(接続の外接の四角が箱や題名を覆う例・距離・面積・倍率。関数と埋めた文字列の両方)、位置の絶対パス、`reveal` の受け付け(印の違い・整数でない・範囲の外・部品 i と接続 P+i が別の行を指す)、落ちた回が表を置き換えないこと。
   - 結合: 0.9.0 の core で例の図を描き、地図を受け、`reveal` でその行が選ばれる。
   - e2e(Playwright。本番の `--production` の出力で回す): 幅に合わせた状態と 200% で、箱と接続をクリックして、エディタの選びがその行になる。ドラッグでは飛ばない。
-  - 結合テストの fixture の core を、v0.9.0 の GitHub release の tarball に上げる。古い core(`--locations` が無い)の場合は、単体の偽の CLI で確かめる。
+  - 結合テストの fixture の core を、v0.9.0 の GitHub release の tarball(出した)に上げる。古い core(`--locations` が無い)の場合は、単体の偽の CLI で確かめる。
 - **U2**: D6(帯の行から飛ぶ)。
 - **U3**: D7(ソースから図へ)。U1・U2 のあとで決める。
 
