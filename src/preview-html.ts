@@ -1,4 +1,5 @@
 // The preview's page and the pieces of `build` it needs. No `vscode` import (unit-tested with node --test).
+import path from 'node:path';
 import {crashFinding} from './check.ts';
 
 /** `build` into a scratch file: nothing is written into the project; --no-lint so a figure with findings still shows (check reports them). */
@@ -10,7 +11,7 @@ export function buildArgs(file: string, out: string): string[] {
  * Why a build failed, for the banner: the `✗ <source>: <message>` lines when the CLI printed them (newer core),
  * else the Error line of a crash (core 0.5.0), else the meaningful rest of stderr.
  */
-export function buildErrorText(file: string, stderr: string): string {
+export function buildErrorText(file: string, stderr: string, workspaceFolder?: string): string {
   const lines = stderr.split(/\r?\n/).filter(s => s.trim() && !/DeprecationWarning|--trace-deprecation|^Node\.js v/.test(s));
   const failed = lines.filter(s => /^\s*✗ /.test(s)).map(s => {
     const failure = s.trim().slice(2);
@@ -19,6 +20,16 @@ export function buildErrorText(file: string, stderr: string): string {
     const detail = failure.slice(file.length + 1);
     const sameFile = detail.match(/^(\d+):\d+: (.*)$/);
     if (sameFile) return `${sameFile[2]}（${sameFile[1]} 行目）`;
+    const [, helper, locationAndMessage] = detail.match(/^ (.+?)(:\d+:\d+: .*)$/) ?? [];
+    if (helper && locationAndMessage) {
+      // The CLI runs in the source's directory; display paths inside the workspace from its root.
+      let shown = path.resolve(path.dirname(file), helper);
+      if (workspaceFolder) {
+        const relative = path.relative(workspaceFolder, shown);
+        if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) shown = relative;
+      }
+      return shown + locationAndMessage;
+    }
     return detail.startsWith(' ') ? detail.slice(1) : failure;
   });
   if (failed.length) return failed.join('\n');

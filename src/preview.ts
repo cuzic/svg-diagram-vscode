@@ -119,7 +119,8 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
     let svg: string | undefined;
     try { svg = await fs.readFile(out, 'utf8'); } catch { /* not written: the build failed */ }
     if (error || !svg) {
-      const message = buildErrorText(source.fsPath, stderr);
+      const workspaceFolder = vscode.workspace.getWorkspaceFolder(source)?.uri.fsPath;
+      const message = buildErrorText(file, stderr, workspaceFolder);
       this.deps.log.warn(`プレビュー ${title}: ${message}`);
       return this.post({kind: 'error', title, file, message});
     }

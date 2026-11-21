@@ -25,6 +25,7 @@ export interface Finding {
   column?: number;
   location?: SourceLocation;
   via?: SourcePosition[];
+  related?: SourceLocation[];
   rule: string;
   severity: Severity;
   message: string;
@@ -54,7 +55,7 @@ export function checkArgs(files: string[]): string[] {
 }
 
 /**
- * Parses the CLI's stdout. The finding and location paths are made absolute against `cwd`.
+ * Parses the CLI's stdout. The finding, location and related paths are made absolute against `cwd`.
  * Throws with the start of the output when it is not the JSON shape (an old CLI, a crash before the summary).
  */
 export function parseCheckOutput(stdout: string, cwd: string): CheckOutput {
@@ -73,6 +74,7 @@ export function parseCheckOutput(stdout: string, cwd: string): CheckOutput {
       ...f,
       file: path.resolve(cwd, f.file),
       ...(f.location ? {location: {...f.location, file: path.resolve(cwd, f.location.file)}} : {}),
+      ...(f.related ? {related: f.related.map(p => ({...p, file: path.resolve(cwd, p.file)}))} : {}),
     })),
   };
 }
@@ -87,6 +89,7 @@ export function placeFinding(f: Finding, text: string | undefined): Placed {
   const relatedInformation: RelatedInformation[] = [];
   if (f.location) relatedInformation.push({...f.location, label: '指摘箇所'});
   for (const p of f.via ?? []) relatedInformation.push({...p, file: f.file, label: '呼び出し元'});
+  for (const p of f.related ?? []) relatedInformation.push({...p, label: '相手'});
   const placed = {file: f.file, finding: f, ...(relatedInformation.length ? {relatedInformation} : {})};
   if (f.line && f.line >= 1) {
     const i = f.line - 1;

@@ -17,6 +17,26 @@ test('buildErrorText: a same-file location shows only the message and line', () 
   assert.equal(buildErrorText(file, stderr), 'Error: 幅が揃っていない（12 行目）');
 });
 
+test('buildErrorText: a helper inside the workspace is shown relative to its root', () => {
+  const file = '/p/project/diagrams/a.ts';
+  for (const helper of ['/p/project/共有 部品/parts.ts', '../共有 部品/parts.ts']) {
+    const stderr = `✗ ${file}: ${helper}:12:5: Error: 幅が揃っていない\n`;
+    assert.equal(buildErrorText(file, stderr, '/p/project'), '共有 部品/parts.ts:12:5: Error: 幅が揃っていない');
+  }
+});
+
+test('buildErrorText: a helper outside the workspace keeps its absolute path', () => {
+  const file = '/p/project/diagrams/a.ts';
+  for (const helper of ['/p/project-shared/parts.ts', '../../project-shared/parts.ts']) {
+    const stderr = `✗ ${file}: ${helper}:12:5: Error: 幅が揃っていない\n`;
+    assert.equal(buildErrorText(file, stderr, '/p/project'), '/p/project-shared/parts.ts:12:5: Error: 幅が揃っていない');
+  }
+});
+
+test('buildErrorText: a helper is shown with an absolute path when there is no workspace', () => {
+  assert.equal(buildErrorText('/p/diagrams/a.ts', '✗ /p/diagrams/a.ts: ../parts.ts:12:5: 失敗'), '/p/parts.ts:12:5: 失敗');
+});
+
 test('buildErrorText: a 0.5.0 crash → the Error line and the line of the source', () => {
   const stderr = 'file:///p/a.ts:5\n  throw new Error(\'x\');\n\nError: fixture: 壊れた\n    at define (file:///p/a.ts:5:9)\n\nNode.js v26.13.0\n';
   assert.equal(buildErrorText('/p/a.ts', stderr), 'Error: fixture: 壊れた（5 行目）');

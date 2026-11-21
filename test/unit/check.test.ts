@@ -76,6 +76,19 @@ test('placeFinding: via retains the order of the callers', () => {
   ]);
 });
 
+test('placeFinding: related locations resolve against the CLI cwd and link to each counterpart', () => {
+  const {findings: [finding]} = parseCheckOutput(JSON.stringify({findings: [{
+    ...f({file: 'a.ts', line: 3, column: 7, via: [{line: 5, column: 3}]}),
+    related: [{file: '../parts.ts', line: 4, column: 9}, {file: 'a.ts', line: 3, column: 27}],
+  }]}), '/work/diagrams');
+  assert.ok(finding);
+  assert.deepEqual(placeFinding(finding, src).relatedInformation, [
+    {file: path.resolve('/work/diagrams/a.ts'), line: 5, column: 3, label: '呼び出し元'},
+    {file: path.resolve('/work/parts.ts'), line: 4, column: 9, label: '相手'},
+    {file: path.resolve('/work/diagrams/a.ts'), line: 3, column: 27, label: '相手'},
+  ]);
+});
+
 test('placeFinding: no line, the band label found once → on the label', () => {
   const p = placeFinding(f({data: {band: '「受付」'}}), src);
   assert.deepEqual([p.line, p.start, p.end, p.approximate], [2, 19, 21, true]);
