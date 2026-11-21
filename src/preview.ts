@@ -21,6 +21,15 @@ export interface PreviewDeps {
 /** What the page keeps with vscode.setState (VS Code hands it back after a reload). */
 interface PanelState { last?: {file?: string} }
 
+function revealColumn(editors: readonly vscode.TextEditor[], document: vscode.TextDocument, previewColumn: vscode.ViewColumn | undefined): vscode.ViewColumn {
+  const visible = editors.find(e => e.viewColumn !== previewColumn && e.document === document);
+  return visible?.viewColumn ?? (previewColumn === vscode.ViewColumn.One ? vscode.ViewColumn.Two : vscode.ViewColumn.One);
+}
+
+function isStalePosition(targetDirty: boolean, source: vscode.TextDocument | undefined, drawnVersion: number | undefined): boolean {
+  return targetDirty || !!source && (source.isDirty || (drawnVersion !== undefined && source.version !== drawnVersion));
+}
+
 export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSerializer<PanelState> {
   private panel: vscode.WebviewPanel | undefined;
   private source: vscode.Uri | undefined;
@@ -28,6 +37,7 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
   private readonly buildSession = randomBytes(16).toString('hex');
   private buildNumber = 0;
   private revealTable: RevealTable | undefined;
+  private lastSvg: Extract<ToPage, {kind: 'svg'}> | undefined;
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly deps: PreviewDeps;
   private readonly viewType: string;
@@ -68,7 +78,11 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
     panel.webview.html = previewShellHtml({cspSource: panel.webview.cspSource, nonce: randomBytes(16).toString('base64')});
     panel.webview.onDidReceiveMessage((message: unknown) => {
       if (this.panel !== panel || !message || typeof message !== 'object' || !('kind' in message)) return;
-      if (message.kind === 'ready' && this.lastMessage) void panel.webview.postMessage(this.lastMessage);
+      if (message.kind === 'ready' && this.lastMessage) {
+        // A hidden page may have missed the SVG that owns the current reveal table.
+        if (this.lastSvg && this.lastMessage.kind !== 'svg') void panel.webview.postMessage(this.lastSvg);
+        void panel.webview.postMessage(this.lastMessage);
+      }
       if (message.kind === 'reveal') void this.reveal(panel, message);
     });
     panel.onDidDispose(() => {
@@ -76,13 +90,17 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
       this.panel = undefined;
       this.source = undefined;
       this.revealTable = undefined;
+      this.lastSvg = undefined;
       this.lastMessage = undefined;
       this.building?.abort();
     });
   }
 
   private follow(uri: vscode.Uri): void {
-    if (uri.toString() !== this.source?.toString()) this.revealTable = undefined;
+    if (uri.toString() !== this.source?.toString()) {
+      this.revealTable = undefined;
+      this.lastSvg = undefined;
+    }
     this.source = uri;
     if (this.panel) this.panel.title = `プレビュー: ${path.basename(uri.fsPath)}`;
     void this.render();
@@ -105,6 +123,7 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
   async render(): Promise<void> {
     const source = this.source;
     if (!source || !this.panel) return;
+    const sourceVersion = vscode.workspace.textDocuments.find(d => d.uri.toString() === source.toString())?.version;
     const title = path.basename(source.fsPath);
     const file = source.fsPath;
     const build = `${this.buildSession}-${++this.buildNumber}`;
@@ -135,7 +154,6 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
       const name = title.replace(/\.(m?ts|m?js)$/, '');
       const out = path.join(dir, name + '.svg');
       const mapFile = supportsLocations ? path.join(dir, name + '.locations.json') : undefined;
-      const sourceVersion = vscode.workspace.textDocuments.find(d => d.uri.toString() === source.toString())?.version;
       const {stderr, error} = await exec(cli.bin, buildArgs(file, out, mapFile), {cwd, signal});
       if (signal.aborted) return;
       const svg = error ? undefined : await fs.readFile(out, 'utf8').catch(() => undefined);
@@ -175,12 +193,11 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
       if (this.panel !== panel) return;
       if (this.revealTable !== table) return changed();
 
-      const visible = vscode.window.visibleTextEditors.find(e => e.viewColumn !== panel.viewColumn && e.document === document);
-      const viewColumn = visible?.viewColumn ?? (panel.viewColumn === vscode.ViewColumn.One ? vscode.ViewColumn.Two : vscode.ViewColumn.One);
+      const viewColumn = revealColumn(vscode.window.visibleTextEditors, document, panel.viewColumn);
       const range = placeSourcePosition(line, column, document.getText());
       const selection = document.validateRange(new vscode.Range(range.line, range.start, range.line, range.end));
       const source = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === table.file);
-      const stale = document.isDirty || source?.isDirty || (source && table.sourceVersion !== undefined && source.version !== table.sourceVersion);
+      const stale = isStalePosition(document.isDirty, source, table.sourceVersion);
       const editor = await vscode.window.showTextDocument(document, {viewColumn, selection});
       editor.revealRange(selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
       if (stale) vscode.window.setStatusBarMessage('保存前の位置です', 4000);
@@ -191,6 +208,7 @@ export class PreviewManager implements vscode.Disposable, vscode.WebviewPanelSer
 
   private post(message: ToPage, locations?: ReturnType<typeof readPreviewLocations>, sourceVersion?: number): void {
     this.revealTable = tableAfterMessage(this.revealTable, message, locations, sourceVersion);
+    if (message.kind === 'svg') this.lastSvg = message;
     this.lastMessage = message;
     void this.panel?.webview.postMessage(message);
   }

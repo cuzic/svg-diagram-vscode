@@ -189,6 +189,61 @@ suite('preview', () => {
     }
   });
 
+  test('a reconnected webview reveals from the replayed drawing after an error', async function () {
+    this.timeout(60_000);
+    const base = locationFixture();
+    const uri = vscode.Uri.joinPath(base, 'preview-links.diagram.ts');
+    const {cli} = resolveCli({folder: base.fsPath, env: {}});
+    assert.ok(cli);
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const log = vscode.window.createOutputChannel('svg-diagram preview replay test', {log: true});
+    const scratch = vscode.Uri.file(fs.mkdtempSync(path.join(os.tmpdir(), 'svgd-preview-test-')));
+    const viewType = 'svgDiagram.preview.replayTest';
+    let cliAvailable = true;
+    const manager = new PreviewManager({getCli: () => cliAvailable ? cli : undefined, log, scratchDir: scratch}, viewType);
+    const panel = vscode.window.createWebviewPanel(viewType, 'Preview replay test', vscode.ViewColumn.One);
+    try {
+      await manager.deserializeWebviewPanel(panel, {last: {file: uri.fsPath}});
+      panel.webview.html = '<!doctype html><title>Waiting to reconnect</title>';
+      await manager.render();
+      const drawing = manager.lastMessage;
+      assert.ok(drawing?.kind === 'svg' && drawing.map?.connects.length);
+      cliAvailable = false;
+      await manager.render();
+      assert.equal(manager.lastMessage?.kind, 'error');
+      assert.ok(!vscode.window.visibleTextEditors.some(e => e.document.uri.fsPath === uri.fsPath));
+
+      // Respond only after the reconnected page has received both messages in order.
+      panel.webview.html = `<!doctype html>
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-replay-test'">
+      <script nonce="replay-test">
+        const vscode = acquireVsCodeApi();
+        let drawing;
+        window.addEventListener('message', ({data}) => {
+          if (data.kind === 'svg') drawing = data;
+          if (data.kind === 'error' && drawing?.build === ${JSON.stringify(drawing.build)}) {
+            vscode.postMessage({kind: 'reveal', build: drawing.build, id: drawing.map.connects[0].id});
+          }
+        });
+        vscode.postMessage({kind: 'ready'});
+      </script>`;
+      const expected = new vscode.Range(8, 4, 8, 11);
+      for (const end = Date.now() + 30_000; Date.now() < end; await new Promise(r => setTimeout(r, 100))) {
+        const editor = vscode.window.activeTextEditor;
+        if (editor?.document.uri.fsPath !== uri.fsPath || !editor.selection.isEqual(expected)) continue;
+        assert.equal(editor.document.getText(editor.selection), 'connect');
+        assert.equal(editor.viewColumn, vscode.ViewColumn.Two);
+        assert.equal(panel.visible, true);
+        return;
+      }
+      assert.fail('the replayed drawing did not reveal connect() beside the preview');
+    } finally {
+      manager.dispose();
+      log.dispose();
+      fs.rmSync(scratch.fsPath, {recursive: true, force: true});
+    }
+  });
+
   type Msg = {kind: string; svg?: string; message?: string; file?: string};
   async function previewOf(name: string, want: string): Promise<Msg> {
     const base = vscode.workspace.workspaceFolders?.[0]?.uri;
