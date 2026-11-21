@@ -5,10 +5,26 @@ import {pathToFileURL} from 'node:url';
 
 export type Severity = 'error' | 'warn' | 'info';
 
+interface SourcePosition {
+  line: number;
+  column: number;
+}
+
+interface SourceLocation extends SourcePosition {
+  file: string;
+}
+
+interface RelatedInformation extends SourceLocation {
+  label: string;
+}
+
 /** One entry of `check --format json`'s `findings` (core: check-diagram.ts CheckFinding). */
 export interface Finding {
   file: string;
   line?: number;
+  column?: number;
+  location?: SourceLocation;
+  via?: SourcePosition[];
   rule: string;
   severity: Severity;
   message: string;
@@ -27,9 +43,10 @@ export interface Placed {
   line: number;
   start: number;
   end: number;
-  /** true when the CLI gave no line: the place is the band's label found in the text, or the first line. */
+  /** true when the CLI gave no line in this file: the band's label or the first line. */
   approximate: boolean;
   finding: Finding;
+  relatedInformation?: RelatedInformation[];
 }
 
 export function checkArgs(files: string[]): string[] {
@@ -37,7 +54,7 @@ export function checkArgs(files: string[]): string[] {
 }
 
 /**
- * Parses the CLI's stdout. `file` is made absolute against `cwd` (the CLI echoes the path it was given).
+ * Parses the CLI's stdout. The finding and location paths are made absolute against `cwd`.
  * Throws with the start of the output when it is not the JSON shape (an old CLI, a crash before the summary).
  */
 export function parseCheckOutput(stdout: string, cwd: string): CheckOutput {
@@ -52,25 +69,38 @@ export function parseCheckOutput(stdout: string, cwd: string): CheckOutput {
   return {
     errors: o.errors ?? 0,
     warnings: o.warnings ?? 0,
-    findings: o.findings.map(f => ({...f, file: path.resolve(cwd, f.file)})),
+    findings: o.findings.map(f => ({
+      ...f,
+      file: path.resolve(cwd, f.file),
+      ...(f.location ? {location: {...f.location, file: path.resolve(cwd, f.location.file)}} : {}),
+    })),
   };
 }
 
 /**
- * Where a finding goes in its source text. A CLI line wins. Otherwise a layout finding names its band
- * (`data.band` = 「受付」): when that label appears in exactly one string literal, the squiggle goes on it.
+ * Where a finding goes in its source text. A CLI line wins. A location in another file goes on the first line.
+ * Otherwise a layout finding names its band (`data.band` = 「受付」). A unique string literal puts the squiggle there.
  * Everything else sits on the first line, as a whole-line mark.
  */
 export function placeFinding(f: Finding, text: string | undefined): Placed {
   const lines = text?.split(/\r?\n/) ?? [];
+  const relatedInformation: RelatedInformation[] = [];
+  if (f.location) relatedInformation.push({...f.location, label: '指摘箇所'});
+  for (const p of f.via ?? []) relatedInformation.push({...p, file: f.file, label: '呼び出し元'});
+  const placed = {file: f.file, finding: f, ...(relatedInformation.length ? {relatedInformation} : {})};
   if (f.line && f.line >= 1) {
     const i = f.line - 1;
     const s = lines[i] ?? '';
+    if (f.column && f.column >= 1) {
+      const start = f.column - 1;
+      const token = s.slice(start).match(/^(?:[$_\p{ID_Start}](?:[$\p{ID_Continue}]|\u200c|\u200d)*|.)/u)?.[0];
+      return {...placed, line: i, start, end: start + (token?.length ?? 1), approximate: false};
+    }
     const start = s.length - s.trimStart().length;
-    return {file: f.file, line: i, start, end: Math.max(s.length, start + 1), approximate: false, finding: f};
+    return {...placed, line: i, start, end: Math.max(s.length, start + 1), approximate: false};
   }
   const label = f.data?.band?.match(/^「(.+)」$/)?.[1];
-  if (label && text) {
+  if (!f.location && label && text) {
     const hits: {line: number; col: number}[] = [];
     lines.forEach((s, line) => {
       for (const q of ["'", '"', '`']) {
@@ -79,15 +109,17 @@ export function placeFinding(f: Finding, text: string | undefined): Placed {
     });
     if (hits.length === 1 && hits[0]) {
       const {line, col} = hits[0];
-      return {file: f.file, line, start: col, end: col + label.length, approximate: true, finding: f};
+      return {...placed, line, start: col, end: col + label.length, approximate: true};
     }
   }
-  return {file: f.file, line: 0, start: 0, end: Math.max(lines[0]?.length ?? 0, 1), approximate: true, finding: f};
+  return {...placed, line: 0, start: 0, end: Math.max(lines[0]?.length ?? 0, 1), approximate: true};
 }
 
 /** The message as shown: the CLI's message, then how to fix it when the CLI says. */
 export function findingMessage(f: Finding): string {
-  return f.data?.fix ? `${f.message}\n直し方: ${f.data.fix}` : f.message;
+  const loc = f.location;
+  const message = loc ? `${path.basename(loc.file)}:${loc.line}:${loc.column}: ${f.message}` : f.message;
+  return f.data?.fix ? `${message}\n直し方: ${f.data.fix}` : message;
 }
 
 /**

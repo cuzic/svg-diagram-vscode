@@ -181,6 +181,10 @@ function toDiagnostic(f: Finding, text: string | undefined): vscode.Diagnostic {
   const d = new vscode.Diagnostic(new vscode.Range(p.line, p.start, p.line, p.end), findingMessage(f), SEVERITY[f.severity] ?? vscode.DiagnosticSeverity.Information);
   d.source = 'svg-diagram';
   d.code = f.rule;
+  d.relatedInformation = p.relatedInformation?.map(({file, line, column, label}) => {
+    const position = new vscode.Position(line - 1, column - 1);
+    return new vscode.DiagnosticRelatedInformation(new vscode.Location(vscode.Uri.file(file), position), label);
+  });
   return d;
 }
 
