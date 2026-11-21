@@ -7,35 +7,56 @@ export function buildArgs(file: string, out: string): string[] {
   return ['build', file, '--out', out, '--no-lint'];
 }
 
+const layoutFailure = 'layout verification failed before any SVG was written:';
+
 /**
- * Why a build failed, for the banner: the `✗ <source>: <message>` lines when the CLI printed them (newer core),
+ * Why a build failed, for the banner: the `✗` lines and their layout details when the CLI printed them,
  * else the Error line of a crash (core 0.5.0), else the meaningful rest of stderr.
  */
 export function buildErrorText(file: string, stderr: string, workspaceFolder?: string): string {
-  const lines = stderr.split(/\r?\n/).filter(s => s.trim() && !/DeprecationWarning|--trace-deprecation|^Node\.js v/.test(s));
-  const failed = lines.filter(s => /^\s*✗ /.test(s)).map(s => {
-    const failure = s.trim().slice(2);
-    if (!failure.startsWith(`${file}:`)) return failure;
-    // The title already names the source.
-    const detail = failure.slice(file.length + 1);
-    const sameFile = detail.match(/^(\d+):\d+: (.*)$/);
-    if (sameFile) return `${sameFile[2]}（${sameFile[1]} 行目）`;
-    const [, helper, locationAndMessage] = detail.match(/^ (.+?)(:\d+:\d+: .*)$/) ?? [];
-    if (helper && locationAndMessage) {
-      // The CLI runs in the source's directory; display paths inside the workspace from its root.
-      let shown = path.resolve(path.dirname(file), helper);
-      if (workspaceFolder) {
-        const relative = path.relative(workspaceFolder, shown);
-        if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) shown = relative;
-      }
-      return shown + locationAndMessage;
+  const lines = stderr.split(/\r?\n/);
+  const meaningful = (s: string) => !!s.trim() && !/DeprecationWarning|--trace-deprecation|^Node\.js v/.test(s);
+  const failureLine = /^\s*✗ /;
+  const failed: string[] = [];
+  for (const [i, line] of lines.entries()) {
+    if (!failureLine.test(line) || !meaningful(line)) continue;
+    const failure = line.trim().slice(2);
+    if (!failure.startsWith(`${file}:`)) {
+      failed.push(failure);
+      continue;
     }
-    return detail.startsWith(' ') ? detail.slice(1) : failure;
-  });
+    // The title already names the source.
+    const rest = failure.slice(file.length + 1);
+    const detail = rest.startsWith(' ') ? rest.slice(1) : failure;
+    const summary = rest ? formatBuildDetail(file, detail, workspaceFolder) : '';
+    if (summary) failed.push(summary);
+    const firstDetail = failed.length;
+    if (!rest || summary.includes(layoutFailure)) {
+      for (let j = i + 1; ; j++) {
+        const continuation = lines[j];
+        if (!continuation || !/^[ \t]+\S/.test(continuation) || failureLine.test(continuation) || !meaningful(continuation)) break;
+        failed.push(formatBuildDetail(file, continuation.trim(), workspaceFolder));
+      }
+    }
+    if (!summary && failed.length === firstDetail) failed.push(failure);
+  }
   if (failed.length) return failed.join('\n');
-  const crash = crashFinding(file, lines.join('\n'));
+  const cleaned = lines.filter(meaningful).join('\n');
+  const crash = crashFinding(file, cleaned);
   if (crash.message !== 'check が JSON を出さずに失敗した') return crash.line ? `${crash.message}（${crash.line} 行目）` : crash.message;
-  return lines.join('\n').trim() || 'build が失敗した（出力なし）';
+  return cleaned.trim() || 'build が失敗した（出力なし）';
+}
+
+function formatBuildDetail(file: string, detail: string, workspaceFolder?: string): string {
+  const [, source, line, column, text] = detail.match(/^(.+?):(\d+):(\d+): (.*)$/) ?? [];
+  const message = (text ?? detail).replace(/^build\(.*\): (?=layout verification failed\b)/, '');
+  if (!source) return message;
+  // The CLI runs in the source's directory; display paths inside the workspace from its root.
+  const resolved = path.resolve(path.dirname(file), source);
+  if (resolved === file) return `${message}（${line} 行目）`;
+  const relative = workspaceFolder && path.relative(workspaceFolder, resolved);
+  const inside = relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  return `${inside ? relative : resolved}:${line}:${column}: ${message}`;
 }
 
 /** The SVG as it goes into the page: no XML prolog / doctype (inline SVG in HTML). */
