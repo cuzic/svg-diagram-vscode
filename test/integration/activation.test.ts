@@ -4,6 +4,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as vscode from 'vscode';
 
+const locationCli = 'finding-locations-cli.sh';
+
+function locationFixture(): vscode.Uri {
+  const base = vscode.workspace.workspaceFolders?.find(folder => folder.name === 'workspace')?.uri;
+  assert.ok(base, 'no fixture workspace folder');
+  return base;
+}
+
+function fixtureSettings(base: vscode.Uri): string {
+  return vscode.Uri.joinPath(base, '.vscode', 'settings.json').fsPath;
+}
+
+suiteSetup(async () => {
+  const base = locationFixture();
+  const config = vscode.workspace.getConfiguration('svgDiagram', base);
+  const settings = fixtureSettings(base);
+  const legacyContents = fs.existsSync(settings) ? fs.readFileSync(settings, 'utf8') : undefined;
+  // Clear overrides left by interrupted runs, including the old workspace-folder override.
+  if (config.inspect<string>('cliPath')?.workspaceFolderValue === './' + locationCli) {
+    await config.update('cliPath', undefined, vscode.ConfigurationTarget.WorkspaceFolder);
+  }
+  if (legacyContents && /^\s*\{\s*(?:"svgDiagram\.cliPath"\s*:\s*"\.\/finding-locations-cli\.sh"\s*,?\s*)?\}\s*$/.test(legacyContents)) {
+    fs.rmSync(settings, {force: true});
+  }
+  if (config.inspect<string>('cliPath')?.globalValue === vscode.Uri.joinPath(base, locationCli).fsPath) {
+    await config.update('cliPath', undefined, vscode.ConfigurationTarget.Global);
+  }
+});
+
 suite('activation', () => {
   test('the extension activates and registers its commands', async () => {
     const ext = vscode.extensions.getExtension('cuzic.svg-diagram-vscode');
@@ -18,7 +47,31 @@ suite('cli', () => {
   test('svgDiagram.showCli runs without throwing', async () => {
     await vscode.commands.executeCommand('svgDiagram.showCli');
   });
+
+  test('the fake CLI leaves fixture workspace settings untouched', async () => {
+    const settings = fixtureSettings(locationFixture());
+    const readSettings = () => fs.existsSync(settings) ? fs.readFileSync(settings, 'utf8') : undefined;
+    const before = readSettings();
+    await withLocationCli(async () => {
+      assert.deepEqual(readSettings(), before);
+    });
+    assert.deepEqual(readSettings(), before);
+  });
 });
+
+async function withLocationCli(run: (base: vscode.Uri) => Promise<void>): Promise<void> {
+  const base = locationFixture();
+  const config = vscode.workspace.getConfiguration('svgDiagram', base);
+  // The VS Code test runner gives this instance its own user data directory.
+  const previous = config.inspect<string>('cliPath')?.globalValue;
+  const target = vscode.ConfigurationTarget.Global;
+  try {
+    await config.update('cliPath', vscode.Uri.joinPath(base, locationCli).fsPath, target);
+    await run(base);
+  } finally {
+    await config.update('cliPath', previous, target);
+  }
+}
 
 suite('check → Problems', () => {
   // test/fixtures/workspace has svg-diagram 0.8.0 (the GitHub release tarball) in node_modules (CI: npm install there before the run)
@@ -51,23 +104,57 @@ suite('check → Problems', () => {
     assert.equal(d?.range.start.line, 0);
     assert.match(d?.message ?? '', /わざと壊した図/);
   });
+
+  test('CLI locations set the Problems range and related information', () => withLocationCli(async base => {
+    const source = vscode.Uri.joinPath(base, 'locations', 'located.diagram.ts');
+    const parts = vscode.Uri.joinPath(base, 'parts.ts');
+    await vscode.commands.executeCommand('svgDiagram.checkFile', source);
+    const diagnostics = vscode.languages.getDiagnostics(source).filter(d => d.source === 'svg-diagram');
+    assert.equal(diagnostics.length, 2);
+
+    const local = diagnostics.find(d => d.code === 'overlap');
+    assert.ok(local);
+    assert.ok(local.range.isEqual(new vscode.Range(5, 4, 5, 7)), 'the range should cover only box');
+    assert.deepEqual(relatedDetails(local), [
+      {file: source.fsPath, line: 4, column: 34, label: '呼び出し元'},
+      {file: parts.fsPath, line: 3, column: 39, label: '相手'},
+    ]);
+
+    const elsewhere = diagnostics.find(d => d.code === 'build-error');
+    assert.ok(elsewhere);
+    assert.equal(elsewhere.range.start.line, 0);
+    assert.equal(elsewhere.message, 'parts.ts:4:14: 共通部品のエラー');
+    assert.deepEqual(relatedDetails(elsewhere), [
+      {file: parts.fsPath, line: 3, column: 13, label: '指摘箇所'},
+    ]);
+  }));
+
+  function relatedDetails(diagnostic: vscode.Diagnostic) {
+    return diagnostic.relatedInformation?.map(({message, location}) => ({
+      file: location.uri.fsPath, line: location.range.start.line, column: location.range.start.character, label: message,
+    }));
+  }
 });
 
 suite('preview', () => {
   type Msg = {kind: string; svg?: string; message?: string; file?: string};
-  async function previewOf(name: string, want: string, timeoutMs = 60_000): Promise<Msg> {
+  async function previewOf(name: string, want: string): Promise<Msg> {
     const base = vscode.workspace.workspaceFolders?.[0]?.uri;
     assert.ok(base);
     const uri = vscode.Uri.joinPath(base, name);
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
     await vscode.commands.executeCommand('svgDiagram.openPreview');
+    return waitForPreview(uri, want);
+  }
+
+  async function waitForPreview(uri: vscode.Uri, want: string, timeoutMs = 60_000): Promise<Msg> {
     const api = vscode.extensions.getExtension<{testing: {previewMessage(): Msg | undefined}}>('cuzic.svg-diagram-vscode')?.exports;
     assert.ok(api);
     for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
       const m = api.testing.previewMessage();
       if (m?.kind === want && m.file === uri.fsPath) return m;
     }
-    assert.fail(`no ${want} preview for ${name}: last ${JSON.stringify(api.testing.previewMessage())?.slice(0, 300)}`);
+    assert.fail(`no ${want} preview for ${uri.path}: last ${JSON.stringify(api.testing.previewMessage())?.slice(0, 300)}`);
   }
 
   test('a source that builds is drawn as inline SVG', async () => {
@@ -79,6 +166,13 @@ suite('preview', () => {
     const m = await previewOf('broken.diagram.ts', 'error');
     assert.match(m.message ?? '', /わざと壊した図/);
   });
+
+  test('the preview error banner shows a helper relative to the workspace folder', () => withLocationCli(async base => {
+    const uri = vscode.Uri.joinPath(base, 'locations', 'located.diagram.ts');
+    await vscode.commands.executeCommand('svgDiagram.openPreview', uri);
+    const message = await waitForPreview(uri, 'error');
+    assert.equal(message.message, 'parts.ts:4:14: 共通部品のエラー');
+  }));
 });
 
 suite('tasks and commands', () => {
