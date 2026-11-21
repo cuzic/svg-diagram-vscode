@@ -4,6 +4,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as vscode from 'vscode';
 
+const locationCli = 'finding-locations-cli.sh';
+
+function locationFixture(): vscode.Uri {
+  const base = vscode.workspace.workspaceFolders?.find(folder => folder.name === 'workspace')?.uri;
+  assert.ok(base, 'no fixture workspace folder');
+  return base;
+}
+
+function fixtureSettings(base: vscode.Uri): string {
+  return vscode.Uri.joinPath(base, '.vscode', 'settings.json').fsPath;
+}
+
+suiteSetup(async () => {
+  const base = locationFixture();
+  const config = vscode.workspace.getConfiguration('svgDiagram', base);
+  const settings = fixtureSettings(base);
+  const legacyContents = fs.existsSync(settings) ? fs.readFileSync(settings, 'utf8') : undefined;
+  // Clear overrides left by interrupted runs, including the old workspace-folder override.
+  if (config.inspect<string>('cliPath')?.workspaceFolderValue === './' + locationCli) {
+    await config.update('cliPath', undefined, vscode.ConfigurationTarget.WorkspaceFolder);
+  }
+  if (legacyContents && /^\s*\{\s*(?:"svgDiagram\.cliPath"\s*:\s*"\.\/finding-locations-cli\.sh"\s*,?\s*)?\}\s*$/.test(legacyContents)) {
+    fs.rmSync(settings, {force: true});
+  }
+  if (config.inspect<string>('cliPath')?.globalValue === vscode.Uri.joinPath(base, locationCli).fsPath) {
+    await config.update('cliPath', undefined, vscode.ConfigurationTarget.Global);
+  }
+});
+
 suite('activation', () => {
   test('the extension activates and registers its commands', async () => {
     const ext = vscode.extensions.getExtension('cuzic.svg-diagram-vscode');
@@ -18,16 +47,26 @@ suite('cli', () => {
   test('svgDiagram.showCli runs without throwing', async () => {
     await vscode.commands.executeCommand('svgDiagram.showCli');
   });
+
+  test('the fake CLI leaves fixture workspace settings untouched', async () => {
+    const settings = fixtureSettings(locationFixture());
+    const readSettings = () => fs.existsSync(settings) ? fs.readFileSync(settings, 'utf8') : undefined;
+    const before = readSettings();
+    await withLocationCli(async () => {
+      assert.deepEqual(readSettings(), before);
+    });
+    assert.deepEqual(readSettings(), before);
+  });
 });
 
 async function withLocationCli(run: (base: vscode.Uri) => Promise<void>): Promise<void> {
-  const base = vscode.workspace.workspaceFolders?.find(folder => folder.name === 'workspace')?.uri;
-  assert.ok(base, 'no fixture workspace folder');
+  const base = locationFixture();
   const config = vscode.workspace.getConfiguration('svgDiagram', base);
-  const previous = config.inspect<string>('cliPath')?.workspaceFolderValue;
-  const target = vscode.ConfigurationTarget.WorkspaceFolder;
-  await config.update('cliPath', './finding-locations-cli.sh', target);
+  // The VS Code test runner gives this instance its own user data directory.
+  const previous = config.inspect<string>('cliPath')?.globalValue;
+  const target = vscode.ConfigurationTarget.Global;
   try {
+    await config.update('cliPath', vscode.Uri.joinPath(base, locationCli).fsPath, target);
     await run(base);
   } finally {
     await config.update('cliPath', previous, target);
