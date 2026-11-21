@@ -6,6 +6,11 @@ test('buildArgs: scratch output, no lint', () => {
   assert.deepEqual(buildArgs('/p/a.ts', '/s/a.svg'), ['build', '/p/a.ts', '--out', '/s/a.svg', '--no-lint']);
 });
 
+test('buildArgs adds the locations output when the CLI supports it', () => {
+  assert.deepEqual(buildArgs('/p/a.ts', '/s/a.svg', '/s/a.locations.json'),
+    ['build', '/p/a.ts', '--out', '/s/a.svg', '--no-lint', '--locations', '/s/a.locations.json']);
+});
+
 test('buildErrorText: the ✗ lines of a newer core', () => {
   const stderr = '(node:1) [DEP0205] DeprecationWarning: x\n✗ /p/a.ts: diagram({theme}) must be one of 1, 2\n  詳しくは README\n';
   assert.equal(buildErrorText('/p/a.ts', stderr), 'diagram({theme}) must be one of 1, 2'); // the title names the file

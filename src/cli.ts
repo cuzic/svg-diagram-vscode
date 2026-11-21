@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {exec} from './exec.ts';
 
 export type CliSource = 'setting' | 'project' | 'path';
 
@@ -61,6 +62,33 @@ export function resolveCli(opts: ResolveOptions): ResolveResult {
 export function describeCli(cli: ResolvedCli): string {
   const where = {setting: '設定 svgDiagram.cliPath', project: '案件の node_modules', path: 'PATH'}[cli.source];
   return `svg-diagram ${cli.version ?? '(版不明)'}: ${cli.bin}（${where}）`;
+}
+
+const locationsSupport = new Map<string, boolean>();
+
+/** Core checkouts and released packages can advertise different flags even with the same version. */
+export async function supportsBuildLocations(cli: ResolvedCli, opts: {cwd: string; signal?: AbortSignal; timeoutMs?: number}): Promise<boolean> {
+  const key = cli.root && buildUsageKey(cli.root, cli.version);
+  const cached = key ? locationsSupport.get(key) : undefined;
+  if (cached !== undefined) return cached;
+  const {stdout, stderr, error} = await exec(cli.bin, ['build'], opts);
+  if (opts.signal?.aborted || (error && (!('code' in error) || typeof error.code !== 'number' || ('killed' in error && error.killed)))) return false;
+  // A missing source normally exits nonzero after printing usage. Startup errors can also exit nonzero.
+  const usage = [stdout, stderr].flatMap(s => s.split(/\r?\n/)).find(line => /^\s*usage:/i.test(line));
+  const supported = !!usage && /(?:^|[\s[|])--locations(?![\w-])/.test(usage);
+  if (key && (usage || !error)) locationsSupport.set(key, supported);
+  return supported;
+}
+
+function buildUsageKey(root: string, version: string | undefined): string | undefined {
+  try {
+    root = fs.realpathSync(root);
+    for (const entry of ['dist/build-diagram.js', 'build-diagram.ts']) {
+      const stat = fs.statSync(path.join(root, entry), {throwIfNoEntry: false});
+      if (stat?.isFile()) return JSON.stringify([root, version, entry, stat.mtimeMs]);
+    }
+  } catch { /* The CLI can still be probed without a cache key. */ }
+  return undefined;
 }
 
 function expandPath(p: string, folder: string | undefined): string {

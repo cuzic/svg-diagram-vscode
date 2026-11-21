@@ -86,13 +86,32 @@ function isSourcePosition(p: SourcePosition | undefined): p is SourcePosition {
 const identifier = /^[$_\p{ID_Start}](?:[$\p{ID_Continue}]|\u200c|\u200d)*/u;
 const leadingKeywords = /^(?:(?:new|await|typeof|void|delete|throw|return|yield)\s+)+/u;
 
+/** Places a 1-based CLI position on an identifier, with a whole-line fallback for missing columns. */
+export function placeSourcePosition(line: number, column: number | undefined, text: string | undefined): {line: number; start: number; end: number} {
+  const i = line - 1;
+  const s = text?.split(/\r?\n/)[i] ?? '';
+  if (column && column >= 1 && column <= s.length) {
+    const start = column - 1;
+    const tail = s.slice(start);
+    const prefix = tail.match(leadingKeywords)?.[0];
+    const operand = prefix && tail.slice(prefix.length).match(identifier)?.[0];
+    if (prefix && operand) {
+      const operandStart = start + prefix.length;
+      return {line: i, start: operandStart, end: operandStart + operand.length};
+    }
+    const token = tail.match(identifier)?.[0] ?? tail.match(/^./u)?.[0];
+    return {line: i, start, end: start + (token?.length ?? 1)};
+  }
+  const start = s.length - s.trimStart().length;
+  return {line: i, start, end: Math.max(s.length, start + 1)};
+}
+
 /**
  * Where a finding goes in its source text. A CLI line wins. A location in another file goes on the first line.
  * Otherwise a layout finding names its band (`data.band` = 「受付」). A unique string literal puts the squiggle there.
  * Everything else sits on the first line, as a whole-line mark.
  */
 export function placeFinding(f: Finding, text: string | undefined): Placed {
-  const lines = text?.split(/\r?\n/) ?? [];
   const relatedInformation: RelatedInformation[] = [];
   const loc = isSourcePosition(f.location) ? f.location : undefined;
   if (loc) relatedInformation.push({...loc, label: '指摘箇所'});
@@ -103,24 +122,8 @@ export function placeFinding(f: Finding, text: string | undefined): Placed {
     if (isSourcePosition(p)) relatedInformation.push({...p, label: '相手'});
   }
   const placed = {file: f.file, finding: f, ...(relatedInformation.length ? {relatedInformation} : {})};
-  if (f.line && f.line >= 1) {
-    const i = f.line - 1;
-    const s = lines[i] ?? '';
-    if (f.column && f.column >= 1 && f.column <= s.length) {
-      const start = f.column - 1;
-      const tail = s.slice(start);
-      const prefix = tail.match(leadingKeywords)?.[0];
-      const operand = prefix && tail.slice(prefix.length).match(identifier)?.[0];
-      if (prefix && operand) {
-        const operandStart = start + prefix.length;
-        return {...placed, line: i, start: operandStart, end: operandStart + operand.length, approximate: false};
-      }
-      const token = tail.match(identifier)?.[0] ?? tail.match(/^./u)?.[0];
-      return {...placed, line: i, start, end: start + (token?.length ?? 1), approximate: false};
-    }
-    const start = s.length - s.trimStart().length;
-    return {...placed, line: i, start, end: Math.max(s.length, start + 1), approximate: false};
-  }
+  if (f.line && f.line >= 1) return {...placed, ...placeSourcePosition(f.line, f.column, text), approximate: false};
+  const lines = text?.split(/\r?\n/) ?? [];
   const label = f.data?.band?.match(/^「(.+)」$/)?.[1];
   if (!loc && label && text) {
     const hits: {line: number; col: number}[] = [];
