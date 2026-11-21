@@ -33,6 +33,7 @@ pnpm build --production
   VS Code の API の振る舞いに頼る変更(診断・プレビュー・ファイルの監視・JSON の検査)には、結合テストを足す。
 - **先に再現テストを書く。** 直す前に落ちることを確かめてから直す。
 - 新しいコードには、それを壊す変異(手書きでよい)を最低 1 つ当て、テストが落ちることを確かめる。PR 本文に書く。
+  結合テストでしか落ちない変異は、Codex の報告で `NOT RUN (integration)` とし、レビューで確かめる。
 - 設定・コマンド・起動の条件を変えたら、`package.json` の `contributes` と `test/unit/manifest.test.ts`、README、CHANGELOG を合わせる。
 
 ## コードの約束
@@ -46,6 +47,7 @@ pnpm build --production
 
 ## 安全の約束
 
+- `.codex/` と `.pnpmfile.cjs` をコミットしない(Codex の実行スクリプトが、それらを持つブランチを断る)。
 - 試しのファイルや一時ファイルはリポジトリの外に置く。`.vscode-test/`(VS Code のダウンロード)をコミットしない。
 - コミット・コメント・PR に、マシン固有の情報(ユーザー名・絶対パス・トークン)を書かない。
 

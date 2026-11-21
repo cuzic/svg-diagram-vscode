@@ -26,6 +26,7 @@ Codex は AGENTS.md と `.agents/skills/implement-task` を読むが、この会
 - レビュー: docs/reviews/prNN-roundK.md の M1, m2(修正のとき)
 
 ### ブランチ
+- base: <main、積み上げなら下のブランチ>(run-codex.sh の 4 つ目の引数にも渡す)
 - 新規: `<prefix>/<name>`(run-codex.sh が origin/main から作って切り替えてある。積み上げなら下のブランチから)。積み上げの PR はタイトルに `stacked on #NN`
 - 既存 PR: `<branch>` に追加コミット。merge で追従し、force-push しない
 
@@ -57,7 +58,9 @@ CODEX_WORK=<scratchpad>/codex sh .claude/skills/codex-task/scripts/run-codex.sh 
 ```
 
 - `base` は新しいブランチの元(既定 main)。積み上げの PR は下のブランチを渡す。ローカルにしかないブランチは断る(先に push する)。
-- 同じ label の前の clone に、origin に無いコミットがあれば断る(消さない)。
+- 同じ label の前の clone は `cx-<label>.old-<時刻>` に移す(消さない。git も走らせない)。中を見て、要らなければ手で消す。
+- 同じ label が走っている間は断る。ブランチに `.codex/` か `.pnpmfile.cjs` があれば断る(sandbox の外で走るため)。
+- sandbox で書けるのは clone、その `.git`、run ごとの TMPDIR(`/tmp/cx-<label>.*`)、Codex 専用の pnpm ストアと npm のキャッシュ、pnpm のロックだけ。`/tmp` 全体と利用者の pnpm ストアは書けない。
 - 終了コードが 0 でも報告が無ければ失敗として扱う(スクリプトが 1 を返す)。
 
 - Codex はスクラッチの clone(`cx-<label>`)で動き、push と `gh pr create` まで自分で行う。
@@ -78,4 +81,4 @@ CODEX_WORK=<scratchpad>/codex sh .claude/skills/codex-task/scripts/run-codex.sh 
 ## 結合テストと e2e
 
 Codex の sandbox では本物の VS Code(Electron)を開けないことがある。報告の `checks` で `test:integration` / `test:e2e` が
-`not-run` なら、CI の結果で判定する(merge-pr が CI 全緑を見る)。CI で落ちたら、ログを添えて修正の仕様を出す。
+`not-run` なら、CI の結果で判定する(merge-pr が CI 全緑を見る)。`mutations` の `NOT RUN (integration)` は、review-pr のレビュアーに、その変異を結合テストで当てて確かめるよう頼む。CI で落ちたら、ログを添えて修正の仕様を出す。
