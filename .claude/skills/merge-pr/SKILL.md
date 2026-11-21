@@ -45,7 +45,7 @@ Claude(または owner)が行う。main の取り込みや衝突解消は自分�
    `n -ge 5` は今の CI のジョブ数(test と、e2e の ubuntu・macOS × 1.100.0・stable)。ジョブを増減したらここも直す。
    checks が 0 件(push の直後)・取れない・pending・`UNKNOWN` は、どれも止まる側に倒れる。少し置いてやり直す。
    CONFLICTING なら Codex に main の取り込みを頼み、手順 1 からやり直す。
-   **main が動いていないかも見る**: `git fetch -q origin; mb=$(git merge-base origin/main "$SHA"); git diff --stat "$mb" origin/main -- src test package.json | tail -3`。
+   **main が動いていないかも見る**: `git fetch -q origin; mb=$(git merge-base origin/main "$SHA"); git diff --stat "$mb" origin/main -- . ':!docs' ':!*.md' | tail -3`。
    何か出たら Codex に main の取り込みを頼み、CI が回り直してから手順 1 からやり直す。
    CI が PR と関係ない理由(flaky など)で落ちたら、マージせずに、その原因を直す PR を別に作る。
 3. **固定した head でマージする**:
