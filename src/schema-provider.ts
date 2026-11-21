@@ -1,13 +1,13 @@
 // Answers svg-diagram-schema://schema/<file> (package.json `jsonValidation`) with one project's JSON Schemas.
 // See schemas.ts for why it is one project at a time.
 //
-// The project is the one of the active JSON file that gets a schema (site.json, deck.json, …). While another kind of
-// editor is active, the last such project stays. Before any, it is the active file's project, else the one workspace
-// folder that has svg-diagram. When the answer changes (another project's file is shown, a setting changed,
-// svg-diagram was installed or upgraded), all five files are announced as changed, so VS Code fetches them again
-// together and re-checks the open JSON files.
+// The project is the one of the open JSON files that get a schema (site.json, deck.json, …), when they all agree; when
+// files of different projects are open (or one of a project without svg-diagram), nothing is checked until one closes.
+// With none open, it is the active file's project, else the one workspace folder that has svg-diagram. When the answer
+// changes (such a file opened or closed, a setting changed, svg-diagram installed or upgraded), all five files are
+// announced as changed, so VS Code fetches them again together and re-checks the open JSON files.
 import * as vscode from 'vscode';
-import {describeRoot, isSchemaTarget, onlyRoot, rootFor, SCHEMA_FILES, SCHEMA_SCHEME, type SchemaProject, type SchemaRoot, sameRoot, schemaFileOf, schemaText, schemaUri} from './schemas.ts';
+import {describeRoot, isSchemaTarget, onlyRoot, rootFor, rootForOpen, SCHEMA_FILES, SCHEMA_SCHEME, type SchemaProject, type SchemaRoot, sameRoot, schemaFileOf, schemaText, schemaUri} from './schemas.ts';
 
 export interface SchemaProviderDeps {
   /** The project of a file or a workspace folder. */
@@ -21,8 +21,6 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
   private readonly deps: SchemaProviderDeps;
   private readonly disposables: vscode.Disposable[] = [];
   private folderWatchers: vscode.Disposable[] = [];
-  /** The JSON file whose project the schemas come from (the last active one). */
-  private scope: vscode.Uri | undefined;
   private root: SchemaRoot | undefined;
   /** Has VS Code asked yet? (until then, a change need not be announced) */
   private served = false;
@@ -35,7 +33,9 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
       configs,
       configs.onDidCreate(() => this.refresh()),
       configs.onDidDelete(() => this.refresh()),
-      vscode.window.onDidChangeActiveTextEditor(e => { if (e && this.isTarget(e.document.uri)) this.refresh(); }),
+      // the JSON server checks the open documents (not only the visible ones): follow those
+      vscode.workspace.onDidOpenTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(); }),
+      vscode.workspace.onDidCloseTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(); }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => { this.watchFolders(); this.refresh(); }),
       vscode.workspace.registerTextDocumentContentProvider(SCHEMA_SCHEME, this),
     );
@@ -65,17 +65,19 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
 
   private setRoot(root: SchemaRoot): void {
     this.root = root;
-    const whose = this.scope ? `${vscode.workspace.asRelativePath(this.scope)} の案件` : 'ワークスペース';
-    this.deps.log.info(`JSON Schema（${whose}）: ${describeRoot(root)}`);
+    this.deps.log.info(`JSON Schema: ${describeRoot(root)}`);
   }
 
   private pick(): SchemaRoot {
     if (!vscode.workspace.getConfiguration('svgDiagram').get<boolean>('jsonSchemas.enabled', true)) {
       return {reason: '設定 svgDiagram.jsonSchemas.enabled が false なので、JSON は検査しない'};
     }
+    const open = vscode.workspace.textDocuments
+      .filter(d => this.isTarget(d.uri))
+      .map(d => ({name: vscode.workspace.asRelativePath(d.uri), root: rootFor(this.deps.projectOf(d.uri))}));
+    const forOpen = rootForOpen(open);
+    if (forOpen) return forOpen;
     const active = vscode.window.activeTextEditor?.document.uri;
-    if (active && this.isTarget(active)) this.scope = active;
-    if (this.scope) return rootFor(this.deps.projectOf(this.scope));
     if (active?.scheme === 'file') {
       const root = rootFor(this.deps.projectOf(active));
       if (root.dir) return root;

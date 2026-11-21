@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, test} from 'node:test';
 import type {ResolvedCli} from '../../src/cli.ts';
-import {ACCEPT_ALL, isSchemaTarget, onlyRoot, rootFor, SCHEMA_FILES, sameRoot, schemaFileOf, schemaText, schemaUri} from '../../src/schemas.ts';
+import {ACCEPT_ALL, CORE_TARBALL, isSchemaTarget, onlyRoot, rootFor, rootForOpen, SCHEMA_FILES, sameRoot, schemaFileOf, schemaText, schemaUri} from '../../src/schemas.ts';
 
 let tmp: string;
 beforeEach(() => { tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'svgd-schema-'))); });
@@ -39,16 +39,16 @@ test('isSchemaTarget follows the fileMatch names, by basename, outside node_modu
 
 test("a project's own core is the root, and all five files come from it", () => {
   const cli = core(path.join(tmp, 'node_modules', 'svg-diagram'));
-  const root = rootFor({cli, from: tmp});
+  const root = rootFor({cli, from: tmp, folder: tmp});
   assert.equal(root.dir, path.join(tmp, 'node_modules', 'svg-diagram', 'schema'));
   for (const f of SCHEMA_FILES) assert.equal(titleOf(schemaText(root, f)), `${f} of 0.8.0`);
 });
 
 test('a core older than 0.8.0 or none: everything is accepted, and the log says how to get one', () => {
-  const old = rootFor({cli: core(path.join(tmp, 'old'), {schema: false, version: '0.5.0'}), from: tmp});
+  const old = rootFor({cli: core(path.join(tmp, 'node_modules', 'svg-diagram'), {schema: false, version: '0.5.0'}), from: tmp, folder: tmp});
   assert.equal(old.dir, undefined);
   assert.equal(schemaText(old, 'site.schema.json'), ACCEPT_ALL);
-  assert.match(old.reason ?? '', /0\.5\.0.*JSON Schema が無い.*github:cuzic\/svg-diagram#v0\.8\.0/);
+  assert.match(old.reason ?? '', /0\.5\.0.*JSON Schema が無い.*releases\/download\/v0\.8\.0\/svg-diagram-0\.8\.0\.tgz/);
   assert.match(rootFor({from: tmp}).reason ?? '', /見つからない/);
 });
 
@@ -66,9 +66,43 @@ test('PATH and a user-level cliPath count only where a .svg-diagram.json is foun
   assert.ok(rootFor({cli: {...global, source: 'setting'}, from: pkg, settingIsGlobal: true}).dir);
 });
 
+test('a node_modules/svg-diagram above the workspace folder is not the project\'s own', () => {
+  const above = core(path.join(tmp, 'node_modules', 'svg-diagram'));
+  const folder = path.join(tmp, 'work', 'repo');
+  fs.mkdirSync(folder, {recursive: true});
+  assert.equal(rootFor({cli: above, from: folder, folder}).dir, undefined);
+  assert.match(rootFor({cli: above, from: folder, folder}).reason ?? '', /ワークスペースフォルダの外/);
+  fs.writeFileSync(path.join(folder, '.svg-diagram.json'), '{}');
+  assert.ok(rootFor({cli: above, from: folder, folder}).dir);
+});
+
+test("a user-level cliPath without .svg-diagram.json falls back to the project's own core", () => {
+  const dev = core(path.join(tmp, 'core-checkout'), {source: 'setting', version: '0.9.0-dev'});
+  const own = core(path.join(tmp, 'proj', 'node_modules', 'svg-diagram'));
+  const folder = path.join(tmp, 'proj');
+  const root = rootFor({cli: dev, projectCli: own, from: folder, folder, settingIsGlobal: true});
+  assert.equal(root.dir, path.join(own.root ?? '', 'schema'));
+  assert.equal(root.version, '0.8.0');
+  // a workspace setting is the project's choice: the checkout is used
+  assert.equal(rootFor({cli: dev, projectCli: own, from: folder, folder, settingIsGlobal: false}).version, '0.9.0-dev');
+});
+
+test('rootForOpen: one schema only when the open files agree', () => {
+  const a = rootFor({cli: core(path.join(tmp, 'a', 'node_modules', 'svg-diagram')), folder: tmp});
+  const b = rootFor({cli: core(path.join(tmp, 'b', 'node_modules', 'svg-diagram'), {version: '0.9.0'}), folder: tmp});
+  const none = rootFor({});
+  assert.equal(rootForOpen([]), undefined);
+  assert.equal(rootForOpen([{name: 'x/site.json', root: a}, {name: 'x/deck.json', root: a}])?.dir, a.dir);
+  assert.equal(rootForOpen([{name: 'u/site.json', root: none}])?.dir, undefined);
+  const mixed = rootForOpen([{name: 'u/site.json', root: none}, {name: 'x/site.json', root: a}]);
+  assert.equal(mixed?.dir, undefined);
+  assert.match(mixed?.reason ?? '', /x\/site\.json（svg-diagram 0\.8\.0）と u\/site\.json（svg-diagram 無し）/);
+  assert.equal(rootForOpen([{name: 'a/site.json', root: a}, {name: 'b/site.json', root: b}])?.dir, undefined);
+});
+
 test('onlyRoot: several folders with svg-diagram cannot be chosen between', () => {
-  const a = rootFor({cli: core(path.join(tmp, 'a'))});
-  const b = rootFor({cli: core(path.join(tmp, 'b'))});
+  const a = rootFor({cli: core(path.join(tmp, 'a', 'node_modules', 'svg-diagram')), folder: tmp});
+  const b = rootFor({cli: core(path.join(tmp, 'b', 'node_modules', 'svg-diagram')), folder: tmp});
   const none = rootFor({});
   assert.equal(onlyRoot([none, a]).dir, a.dir);
   assert.equal(onlyRoot([a, a]).dir, a.dir);
@@ -77,13 +111,20 @@ test('onlyRoot: several folders with svg-diagram cannot be chosen between', () =
 });
 
 test('sameRoot: another core, or the same core upgraded in place, is a new root', () => {
-  const cli = core(path.join(tmp, 'c'));
-  const a = rootFor({cli});
-  assert.ok(sameRoot(a, rootFor({cli})));
+  const dir = path.join(tmp, 'node_modules', 'svg-diagram');
+  const cli = core(dir);
+  const a = rootFor({cli, folder: tmp});
+  assert.ok(sameRoot(a, rootFor({cli, folder: tmp})));
   assert.ok(!sameRoot(undefined, a));
+  // pnpm: an unchanged spec.schema.json keeps its time; only the version and deck.schema.json change
+  assert.ok(!sameRoot(a, rootFor({cli: {...cli, version: '0.8.1'}, folder: tmp})));
   const later = new Date(Date.now() + 5000);
-  fs.utimesSync(path.join(tmp, 'c', 'schema', 'spec.schema.json'), later, later);
-  assert.ok(!sameRoot(a, rootFor({cli})));
+  fs.utimesSync(path.join(dir, 'schema', 'deck.schema.json'), later, later);
+  assert.ok(!sameRoot(a, rootFor({cli, folder: tmp})));
   assert.ok(!sameRoot(a, rootFor({})));
   assert.ok(sameRoot(rootFor({}), rootFor({})));
+});
+
+test('CORE_TARBALL is the v0.8.0 release asset', () => {
+  assert.equal(CORE_TARBALL, 'https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz');
 });

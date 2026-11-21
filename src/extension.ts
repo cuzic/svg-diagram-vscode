@@ -130,9 +130,13 @@ function schemaProject(scope: vscode.Uri): SchemaProject {
   const folder = vscode.workspace.getWorkspaceFolder(scope);
   const isFolder = !!folder && scope.toString() === folder.uri.toString();
   const cliPath = vscode.workspace.getConfiguration('svgDiagram', folder ?? scope).inspect<string>('cliPath');
+  const from = isFolder ? scope.fsPath : path.dirname(scope.fsPath);
   return {
     cli: lookup(scope).cli,
-    from: isFolder ? scope.fsPath : path.dirname(scope.fsPath),
+    // the project's own core, even when the setting or PATH is used to run the CLI
+    projectCli: resolveCli({from, folder: folder?.uri.fsPath, env: {}}).cli,
+    from,
+    folder: folder?.uri.fsPath,
     settingIsGlobal: !(cliPath?.workspaceValue?.trim() || cliPath?.workspaceFolderValue?.trim()),
   };
 }

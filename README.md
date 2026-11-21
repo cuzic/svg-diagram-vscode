@@ -36,9 +36,10 @@
 
 `.svg-diagram.json`・`site.json`・デッキ（`deck.json`・`deck-*.json`・`*.deck.json`）を開くと、VS Code の JSON の補完・説明・誤りの表示が効く。部品の `type` は全種類から選べ、選ぶと説明と例のひな形が出る。`node_modules` の下のファイルは対象外。
 
-- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今は `pnpm add -D github:cuzic/svg-diagram#v0.8.0` で入れる。
-- **ウィンドウで 1 つの案件の schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。その案件は、最後にアクティブにした対象の JSON ファイルの案件。そのファイルから上の `node_modules/svg-diagram`、なければ設定 `svgDiagram.cliPath` か `PATH` の svg-diagram。まだ開いていなければ、svg-diagram があるワークスペースフォルダが 1 つだけのとき、そのフォルダ。開いているほかの JSON ファイルも、その schema で検査し直す。マルチルートやモノレポで別の案件のファイルに切り替えると、その案件の schema に替わる。
-- svg-diagram と関係ない案件では何も検査しない（`site.json` や `deck.json` はよくある名前なので）。`PATH` の svg-diagram と、ユーザー設定の `svgDiagram.cliPath` は、そのファイルから上に `.svg-diagram.json` があるときだけ使う（ワークスペース・フォルダの設定は、その案件のものとして使う）。svg-diagram が 0.8.0 より古いとき、設定 `svgDiagram.jsonSchemas.enabled` が false のときも検査しない。どれを使ったか・なぜ検査しないかは、出力ログに出る。
+- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今はリリースの tarball から入れる: `pnpm add -D https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz`（ビルド不要。npm でも同じ URL）。「この案件で svg-diagram を使えるようにする」は npm から入れるので 0.5.0 になり、JSON は検査しない。
+- 案件の svg-diagram は、そのファイルから上の、ワークスペースフォルダの中の `node_modules/svg-diagram`。設定 `svgDiagram.cliPath`（ワークスペース・フォルダの設定）があればそれ。`PATH` の svg-diagram、ユーザー設定の `svgDiagram.cliPath`、フォルダの外の `node_modules` のものは、そのファイルから上に `.svg-diagram.json` があるときだけ使う（なければ、案件の `node_modules` のもの）。
+- **ウィンドウで 1 つの JSON Schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。開いている対象の JSON ファイル（`site.json`・デッキ・`.svg-diagram.json`）がみな同じ svg-diagram の案件のときに、それで検査する。svg-diagram と関係ない案件のファイルや、別の版の svg-diagram の案件のファイルが一緒に開いているときは、どれも検査しない（関係ないファイルに誤りを出さないため。どちらかを閉じると検査する）。どれも開いていなければ、アクティブなファイルの案件、なければ svg-diagram があるワークスペースフォルダが 1 つだけのときそのフォルダ。
+- svg-diagram が 0.8.0 より古いとき、設定 `svgDiagram.jsonSchemas.enabled` が false のときも検査しない。どれを使ったか・なぜ検査しないかは、出力ログに出る。
 - デッキが指す図の `.json` は名前が決まっていないので、先頭に `"$schema": "./node_modules/svg-diagram/schema/figure.schema.json"` を書く（パスはそのファイルから）。`"$schema"` を書いたファイルは、拡張によらず VS Code がそれに従う。
 - svg-diagram を入れた・上げたときは、ワークスペースフォルダの直下の `node_modules` なら気づいて読み直す。それより下のパッケージに入れたときは、ウィンドウにフォーカスを戻したときに読み直す。
 - Windows でも効く（schema のファイルを読むだけで、CLI は走らせない）。信頼していないワークスペースでは、拡張ごと止まるので効かない。
@@ -77,7 +78,7 @@
     pnpm install
     pnpm build          # dist/extension.cjs（--watch で監視）
     pnpm typecheck && pnpm lint && pnpm test
-    (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.8.0（GitHub のリリースタグ）
+    (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.8.0（GitHub のリリースの tarball）
     pnpm test:integration   # 本物の VS Code を落として動かす（画面が要る。CI では xvfb-run）
     pnpm test:e2e       # 本物の VS Code の画面を Playwright で操作する（下）
     pnpm package        # .vsix を作る
@@ -88,7 +89,7 @@
 
 - CI は {Ubuntu（xvfb）, macOS} × {VS Code 1.100.0（engines の下限）, stable} で走らせ、スクリーンショット・trace・HTML レポートを artifact「e2e-<os>-<版>」に上げる（通ったときも）。
 - 手元の Linux で画面がないときは Chromium の headless（`--ozone-platform=headless`）で動く。`VSCODE_VERSION=1.100.0 pnpm test:e2e` で版を選べる。
-- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.8.0。GitHub のリリースタグ）。
+- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.8.0。GitHub のリリースの tarball）。
 - テストの実行プロセスを kill -9 したときは VS Code が残る（別のプロセスグループで起動するため）: `pkill -f svgd-e2e-`。
 
 VS Code で開いて F5（「拡張を起動」）を押すと、`test/fixtures/workspace` を開いた別ウィンドウで拡張が動く。

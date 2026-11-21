@@ -52,14 +52,19 @@ const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const ACCEPT_ALL = `${JSON.stringify({$comment: 'svg-diagram: no JSON Schema to check this file with (see the svg-diagram output log)'})}\n`;
 
 /** How to get a core with the schemas (npm has only 0.5.0 so far). */
-export const SCHEMA_CORE_HINT = '0.8.0 以降で効く（npm には 0.5.0 までしかないので、`pnpm add -D github:cuzic/svg-diagram#v0.8.0`）';
+export const CORE_TARBALL = 'https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz';
+export const SCHEMA_CORE_HINT = `0.8.0 以降で効く（npm には 0.5.0 までしかないので、\`pnpm add -D ${CORE_TARBALL}\`）`;
 
 /** One project, as found for a file (or a folder). */
 export interface SchemaProject {
-  /** The CLI found for it (resolveCli). */
+  /** The CLI found for it (resolveCli: the setting, the project's node_modules, PATH). */
   cli?: ResolvedCli;
+  /** The project's own node_modules/svg-diagram, looked up without the setting and PATH (when `cli` is another one). */
+  projectCli?: ResolvedCli;
   /** Where a `.svg-diagram.json` is looked for, walking up: the file's directory (or the folder). */
   from?: string;
+  /** The workspace folder: a node_modules/svg-diagram above it is not the project's own. */
+  folder?: string;
   /** true when `svgDiagram.cliPath` has no workspace or folder value: a user-level path is not a project of its own. */
   settingIsGlobal?: boolean;
 }
@@ -68,28 +73,41 @@ export interface SchemaProject {
 export interface SchemaRoot {
   dir?: string;
   version?: string;
-  /** The modification time of spec.schema.json: a core upgraded in place is a new root. */
-  stamp?: number;
+  /** Which core exactly (real path, version, newest file time): a core upgraded in place is a new root. */
+  stamp?: string;
   reason?: string;
 }
 
 /**
- * The root of a project. Its own node_modules/svg-diagram always counts. A CLI from PATH, or from a user-level
- * `svgDiagram.cliPath`, counts only where a `.svg-diagram.json` is found from the file up (a global install must not
- * check every `site.json` on the machine).
+ * The root of a project. Its own node_modules/svg-diagram (inside its workspace folder) counts. A CLI from PATH, from a
+ * user-level `svgDiagram.cliPath`, or from a node_modules above the workspace folder counts only where a
+ * `.svg-diagram.json` is found from the file up (a global install must not check every `site.json` on the machine);
+ * otherwise the project's own core, if it has one.
  */
 export function rootFor(project: SchemaProject): SchemaRoot {
   const {cli} = project;
   if (!cli?.root) return {reason: 'svg-diagram が見つからないので、JSON は検査しない'};
-  const own = cli.source === 'project' || (cli.source === 'setting' && !project.settingIsGlobal);
-  if (!own && !(project.from && findUp(project.from, '.svg-diagram.json'))) {
-    const where = cli.source === 'path' ? 'PATH' : 'ユーザー設定の svgDiagram.cliPath';
-    return {reason: `${where} の svg-diagram は、.svg-diagram.json が無い案件には使わないので、JSON は検査しない`};
-  }
-  const dir = path.join(cli.root, 'schema');
-  const stamp = mtime(path.join(dir, 'spec.schema.json'));
-  if (stamp === undefined) return {reason: `svg-diagram ${cli.version ?? '(版不明)'}（${cli.root}）には JSON Schema が無い。${SCHEMA_CORE_HINT}`};
-  return {dir, version: cli.version, stamp};
+  if (isOwn(cli, project) || (project.from && findUp(project.from, '.svg-diagram.json'))) return rootOf(cli.root, cli.version);
+  const own = project.projectCli;
+  if (own?.root && own.root !== cli.root && isOwn(own, project)) return rootOf(own.root, own.version);
+  const where = {path: 'PATH', setting: 'ユーザー設定の svgDiagram.cliPath', project: 'ワークスペースフォルダの外の node_modules'}[cli.source];
+  return {reason: `${where} の svg-diagram（${cli.root}）は、.svg-diagram.json が無い案件には使わないので、JSON は検査しない`};
+}
+
+function isOwn(cli: ResolvedCli, project: SchemaProject): boolean {
+  if (cli.source === 'setting') return !project.settingIsGlobal;
+  if (cli.source !== 'project' || !cli.root || !project.folder) return false;
+  const rel = path.relative(project.folder, cli.root);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function rootOf(root: string, version: string | undefined): SchemaRoot {
+  const dir = path.join(root, 'schema');
+  const times = SCHEMA_FILES.map(f => mtime(path.join(dir, f)));
+  if (times[0] === undefined) return {reason: `svg-diagram ${version ?? '(版不明)'}（${root}）には JSON Schema が無い。${SCHEMA_CORE_HINT}`};
+  let real = root;
+  try { real = fs.realpathSync(root); } catch { /* as found */ }
+  return {dir, version, stamp: `${real}|${version}|${Math.max(...times.map(t => t ?? 0))}`};
 }
 
 /** The first of several roots that has the schemas, when exactly one does (several folders: no way to choose). */
@@ -99,6 +117,20 @@ export function onlyRoot(roots: readonly SchemaRoot[]): SchemaRoot {
   if (distinct.size === 1 && found[0]) return found[0];
   if (distinct.size > 1) return {reason: 'svg-diagram が複数のフォルダにあるので、JSON のファイルを開くまで検査しない'};
   return roots[0] ?? {reason: 'svg-diagram が見つからないので、JSON は検査しない'};
+}
+
+/**
+ * The root for the target files that are open (one schema serves them all). Only when they all agree: a file of an
+ * unrelated project, or of a project with another core, open beside them turns the checks off, rather than showing
+ * errors in a file the schema is not for.
+ */
+export function rootForOpen(open: ReadonlyArray<{name: string; root: SchemaRoot}>): SchemaRoot | undefined {
+  const [first] = open;
+  if (!first) return undefined;
+  const other = open.find(o => o.root.dir !== first.root.dir);
+  if (!other) return first.root;
+  const [a, b] = first.root.dir ? [first, other] : [other, first];
+  return {reason: `${a.name}（${a.root.dir ? `svg-diagram ${a.root.version ?? ''}` : 'svg-diagram 無し'}）と ${b.name}（${b.root.dir ? `svg-diagram ${b.root.version ?? ''}` : 'svg-diagram 無し'}）が開いていて、1 つの JSON Schema では両方を検査できないので、JSON は検査しない（どちらかを閉じると検査する）`};
 }
 
 export const sameRoot = (a: SchemaRoot | undefined, b: SchemaRoot): boolean =>

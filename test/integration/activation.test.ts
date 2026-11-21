@@ -19,7 +19,7 @@ suite('cli', () => {
 });
 
 suite('check → Problems', () => {
-  // test/fixtures/workspace has svg-diagram 0.8.0 (the GitHub release tag) in node_modules (CI: npm install there before the run)
+  // test/fixtures/workspace has svg-diagram 0.8.0 (the GitHub release tarball) in node_modules (CI: npm install there before the run)
   const folder = () => vscode.workspace.workspaceFolders?.[0]?.uri;
 
   async function diagnosticsOf(name: string, timeoutMs = 60_000): Promise<vscode.Diagnostic[]> {
@@ -166,21 +166,6 @@ suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => 
     assert.ok(labels.length >= 60, `only ${labels.length} part types`);
   });
 
-  test("a site.json in a folder without svg-diagram is not checked, and the project's again once its file is shown", async function () {
-    this.timeout(60_000);
-    const other = unrelated('site.json');
-    await show(other);
-    await noErrorsOf(other);
-    await settle();
-    assert.deepEqual(jsonDiagnostics(other).map(d => d.message), []);
-    assert.equal(api()?.schemaRoot()?.dir, undefined);
-    const own = fixture('json/site.json');
-    await show(own);
-    await errorsOf(own);
-    await show(other);
-    await noErrorsOf(other);
-  });
-
   test('svgDiagram.jsonSchemas.enabled: off stops the checks, on brings them back', async function () {
     this.timeout(60_000);
     const uri = fixture('json/site.json');
@@ -191,5 +176,21 @@ suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => 
     assert.match(api()?.schemaRoot()?.reason ?? '', /jsonSchemas\.enabled/);
     await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', true, vscode.ConfigurationTarget.Global);
     await errorsOf(uri);
+  });
+
+  // last: the documents this suite opens stay open for minutes (VS Code keeps documents an extension opened)
+  test('a site.json in a folder without svg-diagram is not checked, nor (while it is open) the project\'s own', async function () {
+    this.timeout(60_000);
+    const other = unrelated('site.json');
+    await show(other);
+    await noErrorsOf(other);
+    assert.equal(api()?.schemaRoot()?.dir, undefined);
+    const own = fixture('json/site.json');
+    await show(own);
+    await noErrorsOf(own);
+    await settle();
+    assert.deepEqual(jsonDiagnostics(other).map(d => d.message), [], 'the unrelated site.json got the project\'s schema');
+    assert.deepEqual(jsonDiagnostics(own).map(d => d.message), []);
+    assert.match(api()?.schemaRoot()?.reason ?? '', /両方を検査できない/);
   });
 });
