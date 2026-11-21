@@ -87,7 +87,7 @@ test("a user-level cliPath without .svg-diagram.json falls back to the project's
   assert.equal(rootFor({cli: dev, projectCli: own, from: folder, folder, settingIsGlobal: false}).version, '0.9.0-dev');
 });
 
-test('rootForOpen: one schema only when the open files agree', () => {
+test('rootForOpen: one schema only when the open files agree on what is served', () => {
   const a = rootFor({cli: core(path.join(tmp, 'a', 'node_modules', 'svg-diagram')), folder: tmp});
   const b = rootFor({cli: core(path.join(tmp, 'b', 'node_modules', 'svg-diagram'), {version: '0.9.0'}), folder: tmp});
   const none = rootFor({});
@@ -98,11 +98,30 @@ test('rootForOpen: one schema only when the open files agree', () => {
   assert.equal(mixed?.dir, undefined);
   assert.match(mixed?.reason ?? '', /x\/site\.json（svg-diagram 0\.8\.0）と u\/site\.json（svg-diagram 無し）/);
   assert.equal(rootForOpen([{name: 'a/site.json', root: a}, {name: 'b/site.json', root: b}])?.dir, undefined);
+  // a core without schemas is named as such, not as "no svg-diagram"
+  const old = rootFor({cli: core(path.join(tmp, 'c', 'node_modules', 'svg-diagram'), {schema: false, version: '0.5.0'}), folder: tmp});
+  assert.match(rootForOpen([{name: 'x/site.json', root: a}, {name: 'c/site.json', root: old}])?.reason ?? '', /c\/site\.json（svg-diagram 0\.5\.0、JSON Schema 無し）/);
 });
 
-test('onlyRoot: several folders with svg-diagram cannot be chosen between', () => {
+test('one core reached by two paths (pnpm links), or two installs of the same schemas, agree', () => {
+  const real = core(path.join(tmp, 'node_modules', '.pnpm', 'svg-diagram@0.8.0', 'node_modules', 'svg-diagram'));
+  for (const pkg of ['a', 'b']) {
+    fs.mkdirSync(path.join(tmp, 'packages', pkg, 'node_modules'), {recursive: true});
+    fs.symlinkSync(real.root ?? '', path.join(tmp, 'packages', pkg, 'node_modules', 'svg-diagram'));
+  }
+  const viaA = rootFor({cli: {...real, root: path.join(tmp, 'packages', 'a', 'node_modules', 'svg-diagram')}, folder: tmp});
+  const viaB = rootFor({cli: {...real, root: path.join(tmp, 'packages', 'b', 'node_modules', 'svg-diagram')}, folder: tmp});
+  assert.ok(viaA.dir && viaB.dir && viaA.dir !== viaB.dir);
+  assert.ok(rootForOpen([{name: 'a/site.json', root: viaA}, {name: 'b/deck.json', root: viaB}])?.dir);
+  // a copy (npm, another folder) of the same version
+  const copy = rootFor({cli: core(path.join(tmp, 'other', 'node_modules', 'svg-diagram')), folder: tmp});
+  assert.ok(rootForOpen([{name: 'a/site.json', root: viaA}, {name: 'o/site.json', root: copy}])?.dir);
+  assert.ok(onlyRoot([viaA, copy]).dir);
+});
+
+test('onlyRoot: several folders with different schemas cannot be chosen between', () => {
   const a = rootFor({cli: core(path.join(tmp, 'a', 'node_modules', 'svg-diagram')), folder: tmp});
-  const b = rootFor({cli: core(path.join(tmp, 'b', 'node_modules', 'svg-diagram')), folder: tmp});
+  const b = rootFor({cli: core(path.join(tmp, 'b', 'node_modules', 'svg-diagram'), {version: '0.9.0'}), folder: tmp});
   const none = rootFor({});
   assert.equal(onlyRoot([none, a]).dir, a.dir);
   assert.equal(onlyRoot([a, a]).dir, a.dir);
@@ -110,19 +129,17 @@ test('onlyRoot: several folders with svg-diagram cannot be chosen between', () =
   assert.equal(onlyRoot([]).dir, undefined);
 });
 
-test('sameRoot: another core, or the same core upgraded in place, is a new root', () => {
+test('sameRoot: what is served; a core upgraded in place is new, and accept-all is the same whatever the reason', () => {
   const dir = path.join(tmp, 'node_modules', 'svg-diagram');
   const cli = core(dir);
   const a = rootFor({cli, folder: tmp});
   assert.ok(sameRoot(a, rootFor({cli, folder: tmp})));
   assert.ok(!sameRoot(undefined, a));
-  // pnpm: an unchanged spec.schema.json keeps its time; only the version and deck.schema.json change
+  // pnpm: unchanged files keep their times; only deck.schema.json changes
+  fs.writeFileSync(path.join(dir, 'schema', 'deck.schema.json'), JSON.stringify({title: 'deck 0.8.1'}));
   assert.ok(!sameRoot(a, rootFor({cli: {...cli, version: '0.8.1'}, folder: tmp})));
-  const later = new Date(Date.now() + 5000);
-  fs.utimesSync(path.join(dir, 'schema', 'deck.schema.json'), later, later);
-  assert.ok(!sameRoot(a, rootFor({cli, folder: tmp})));
   assert.ok(!sameRoot(a, rootFor({})));
-  assert.ok(sameRoot(rootFor({}), rootFor({})));
+  assert.ok(sameRoot(rootFor({}), {reason: 'another reason'}));
 });
 
 test('CORE_TARBALL is the v0.8.0 release asset', () => {

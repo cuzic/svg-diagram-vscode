@@ -1,11 +1,12 @@
 // Answers svg-diagram-schema://schema/<file> (package.json `jsonValidation`) with one project's JSON Schemas.
 // See schemas.ts for why it is one project at a time.
 //
-// The project is the one of the open JSON files that get a schema (site.json, deck.json, …), when they all agree; when
-// files of different projects are open (or one of a project without svg-diagram), nothing is checked until one closes.
-// With none open, it is the active file's project, else the one workspace folder that has svg-diagram. When the answer
-// changes (such a file opened or closed, a setting changed, svg-diagram installed or upgraded), all five files are
-// announced as changed, so VS Code fetches them again together and re-checks the open JSON files.
+// The root is the one the open JSON files that get a schema (site.json, deck.json, …) agree on; when files of projects
+// with different schemas are open (or one of a project without svg-diagram), nothing is checked until one closes. With
+// none open (or only ones outside the file system, such as the git side of a diff), it is the one workspace folder that
+// has svg-diagram. When what is served changes (such a file opened or closed, a setting changed, svg-diagram installed or
+// upgraded), all five files are announced as changed, so VS Code fetches them again together and re-checks the files.
+import path from 'node:path';
 import * as vscode from 'vscode';
 import {describeRoot, isSchemaTarget, onlyRoot, rootFor, rootForOpen, SCHEMA_FILES, SCHEMA_SCHEME, type SchemaProject, type SchemaRoot, sameRoot, schemaFileOf, schemaText, schemaUri} from './schemas.ts';
 
@@ -24,6 +25,8 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
   private root: SchemaRoot | undefined;
   /** Has VS Code asked yet? (until then, a change need not be announced) */
   private served = false;
+  /** The root per directory of the open files (an open or close needs only the new file's); cleared by other refreshes. */
+  private readonly byDir = new Map<string, SchemaRoot>();
 
   constructor(deps: SchemaProviderDeps) {
     this.deps = deps;
@@ -34,8 +37,8 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
       configs.onDidCreate(() => this.refresh()),
       configs.onDidDelete(() => this.refresh()),
       // the JSON server checks the open documents (not only the visible ones): follow those
-      vscode.workspace.onDidOpenTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(); }),
-      vscode.workspace.onDidCloseTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(); }),
+      vscode.workspace.onDidOpenTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(false); }),
+      vscode.workspace.onDidCloseTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(false); }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => { this.watchFolders(); this.refresh(); }),
       vscode.workspace.registerTextDocumentContentProvider(SCHEMA_SCHEME, this),
     );
@@ -50,12 +53,16 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
     return schemaText(this.root ?? {}, file);
   }
 
-  /** Looks again (active JSON file, settings, folders, focus, node_modules changed); announces a changed root. */
-  refresh(): void {
+  /**
+   * Looks again (a target file opened or closed, settings, folders, focus, node_modules changed) and announces what is
+   * served when it changed. `relook`: the projects themselves may have changed (anything but an open or close).
+   */
+  refresh(relook = true): void {
+    if (relook) this.byDir.clear();
     const root = this.pick();
-    if (sameRoot(this.root, root)) return;
-    this.setRoot(root);
-    if (this.served) for (const file of SCHEMA_FILES) this.changed.fire(vscode.Uri.parse(schemaUri(file)));
+    const changed = !sameRoot(this.root, root);
+    if (changed || describeRoot(root) !== describeRoot(this.root ?? {})) this.setRoot(root);
+    if (changed && this.served) for (const file of SCHEMA_FILES) this.changed.fire(vscode.Uri.parse(schemaUri(file)));
   }
 
   /** Which core the files come from now (the integration tests read it through the extension's exports). */
@@ -74,15 +81,18 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
     }
     const open = vscode.workspace.textDocuments
       .filter(d => this.isTarget(d.uri))
-      .map(d => ({name: vscode.workspace.asRelativePath(d.uri), root: rootFor(this.deps.projectOf(d.uri))}));
-    const forOpen = rootForOpen(open);
-    if (forOpen) return forOpen;
-    const active = vscode.window.activeTextEditor?.document.uri;
-    if (active?.scheme === 'file') {
-      const root = rootFor(this.deps.projectOf(active));
-      if (root.dir) return root;
+      .map(d => ({name: vscode.workspace.asRelativePath(d.uri), root: this.rootOf(d.uri)}));
+    return rootForOpen(open) ?? onlyRoot((vscode.workspace.workspaceFolders ?? []).map(f => rootFor(this.deps.projectOf(f.uri))));
+  }
+
+  private rootOf(file: vscode.Uri): SchemaRoot {
+    const dir = path.dirname(file.fsPath);
+    let root = this.byDir.get(dir);
+    if (!root) {
+      root = rootFor(this.deps.projectOf(file));
+      this.byDir.set(dir, root);
     }
-    return onlyRoot((vscode.workspace.workspaceFolders ?? []).map(f => rootFor(this.deps.projectOf(f.uri))));
+    return root;
   }
 
   private isTarget(uri: vscode.Uri): boolean {

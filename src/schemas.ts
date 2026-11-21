@@ -6,13 +6,13 @@
 // the same version as the CLI. The figure and deck schemas name spec.schema.json by a relative $ref, which resolves to
 // the same scheme, so all five are served side by side, always from one core (one "root").
 //
-// A `jsonValidation` URI is one per window: VS Code does not say which file a schema is for. So the root is taken from
-// one project at a time, the project of the active JSON file (see schema-provider.ts), and every matched file in the
-// window is checked against it.
+// A `jsonValidation` URI is one per window: VS Code does not say which file a schema is for. So one root serves the
+// window: the one the open target files agree on (see schema-provider.ts), and every matched file is checked against it.
 //
 // When there is nothing to serve (no svg-diagram in that project, a core older than 0.8.0, or the setting is off), the
 // answer is a schema that accepts everything: `site.json` and `deck.json` are common names, and a project unrelated to
 // svg-diagram must not see errors in them.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type {ResolvedCli} from './cli.ts';
@@ -73,9 +73,14 @@ export interface SchemaProject {
 export interface SchemaRoot {
   dir?: string;
   version?: string;
-  /** Which core exactly (real path, version, newest file time): a core upgraded in place is a new root. */
-  stamp?: string;
+  /**
+   * What is served: a hash of the five files. Two roots with the same id serve the same schemas (one core reached by
+   * two paths, as pnpm links it, or two installs of the same version); a core upgraded in place gets a new one.
+   */
+  id?: string;
+  /** For a root without `dir`: why, and a few words for naming it beside another file. */
   reason?: string;
+  label?: string;
 }
 
 /**
@@ -86,12 +91,12 @@ export interface SchemaRoot {
  */
 export function rootFor(project: SchemaProject): SchemaRoot {
   const {cli} = project;
-  if (!cli?.root) return {reason: 'svg-diagram が見つからないので、JSON は検査しない'};
+  if (!cli?.root) return {reason: 'svg-diagram が見つからないので、JSON は検査しない', label: 'svg-diagram 無し'};
   if (isOwn(cli, project) || (project.from && findUp(project.from, '.svg-diagram.json'))) return rootOf(cli.root, cli.version);
   const own = project.projectCli;
   if (own?.root && own.root !== cli.root && isOwn(own, project)) return rootOf(own.root, own.version);
   const where = {path: 'PATH', setting: 'ユーザー設定の svgDiagram.cliPath', project: 'ワークスペースフォルダの外の node_modules'}[cli.source];
-  return {reason: `${where} の svg-diagram（${cli.root}）は、.svg-diagram.json が無い案件には使わないので、JSON は検査しない`};
+  return {reason: `${where} の svg-diagram（${cli.root}）は、.svg-diagram.json が無い案件には使わないので、JSON は検査しない`, label: `${where} の svg-diagram だけ`};
 }
 
 function isOwn(cli: ResolvedCli, project: SchemaProject): boolean {
@@ -103,17 +108,43 @@ function isOwn(cli: ResolvedCli, project: SchemaProject): boolean {
 
 function rootOf(root: string, version: string | undefined): SchemaRoot {
   const dir = path.join(root, 'schema');
-  const times = SCHEMA_FILES.map(f => mtime(path.join(dir, f)));
-  if (times[0] === undefined) return {reason: `svg-diagram ${version ?? '(版不明)'}（${root}）には JSON Schema が無い。${SCHEMA_CORE_HINT}`};
-  let real = root;
-  try { real = fs.realpathSync(root); } catch { /* as found */ }
-  return {dir, version, stamp: `${real}|${version}|${Math.max(...times.map(t => t ?? 0))}`};
+  const id = contentId(dir);
+  if (!id) return {reason: `svg-diagram ${version ?? '(版不明)'}（${root}）には JSON Schema が無い。${SCHEMA_CORE_HINT}`, label: `svg-diagram ${version ?? '(版不明)'}、JSON Schema 無し`};
+  return {dir, version, id};
+}
+
+/** The hash of the five files, cached by their real paths, sizes and times (the files are about 600 KB). */
+const ids = new Map<string, string>();
+function contentId(dir: string): string | undefined {
+  const stats = SCHEMA_FILES.map(f => {
+    try {
+      const file = fs.realpathSync(path.join(dir, f));
+      const st = fs.statSync(file);
+      return `${file}|${st.size}|${st.mtimeMs}`;
+    } catch {
+      return undefined;
+    }
+  });
+  if (stats.some(s => s === undefined)) return undefined;
+  const key = stats.join('\n');
+  let id = ids.get(key);
+  if (!id) {
+    const hash = crypto.createHash('sha256');
+    try {
+      for (const f of SCHEMA_FILES) hash.update(fs.readFileSync(path.join(dir, f))).update('\0');
+    } catch {
+      return undefined;
+    }
+    id = hash.digest('hex');
+    ids.set(key, id);
+  }
+  return id;
 }
 
 /** The first of several roots that has the schemas, when exactly one does (several folders: no way to choose). */
 export function onlyRoot(roots: readonly SchemaRoot[]): SchemaRoot {
   const found = roots.filter(r => r.dir);
-  const distinct = new Set(found.map(r => r.dir));
+  const distinct = new Set(found.map(r => r.id));
   if (distinct.size === 1 && found[0]) return found[0];
   if (distinct.size > 1) return {reason: 'svg-diagram が複数のフォルダにあるので、JSON のファイルを開くまで検査しない'};
   return roots[0] ?? {reason: 'svg-diagram が見つからないので、JSON は検査しない'};
@@ -127,14 +158,17 @@ export function onlyRoot(roots: readonly SchemaRoot[]): SchemaRoot {
 export function rootForOpen(open: ReadonlyArray<{name: string; root: SchemaRoot}>): SchemaRoot | undefined {
   const [first] = open;
   if (!first) return undefined;
-  const other = open.find(o => o.root.dir !== first.root.dir);
+  const other = open.find(o => o.root.id !== first.root.id);
   if (!other) return first.root;
   const [a, b] = first.root.dir ? [first, other] : [other, first];
-  return {reason: `${a.name}（${a.root.dir ? `svg-diagram ${a.root.version ?? ''}` : 'svg-diagram 無し'}）と ${b.name}（${b.root.dir ? `svg-diagram ${b.root.version ?? ''}` : 'svg-diagram 無し'}）が開いていて、1 つの JSON Schema では両方を検査できないので、JSON は検査しない（どちらかを閉じると検査する）`};
+  const label = (r: SchemaRoot) => (r.dir ? `svg-diagram ${r.version ?? '(版不明)'}` : (r.label ?? 'svg-diagram 無し'));
+  return {
+    reason: `${a.name}（${label(a.root)}）と ${b.name}（${label(b.root)}）が開いていて、1 つの JSON Schema では両方を検査できないので、JSON は検査しない（どちらかを閉じると検査する。タブが無いなら、ほかの拡張が読んだもので、数分で閉じられる）`,
+  };
 }
 
-export const sameRoot = (a: SchemaRoot | undefined, b: SchemaRoot): boolean =>
-  !!a && a.dir === b.dir && a.stamp === b.stamp && a.reason === b.reason;
+/** Is the same served? (accept-all is the same whatever the reason: only the log changes) */
+export const sameRoot = (a: SchemaRoot | undefined, b: SchemaRoot): boolean => !!a && a.id === b.id;
 
 /** The text of one file of a root (accept everything when there is none, or it cannot be read). */
 export function schemaText(root: SchemaRoot, file: SchemaFile): string {
@@ -143,10 +177,6 @@ export function schemaText(root: SchemaRoot, file: SchemaFile): string {
 }
 
 export const describeRoot = (root: SchemaRoot): string => (root.dir ? `svg-diagram ${root.version ?? '(版不明)'} の ${root.dir}` : (root.reason ?? ''));
-
-function mtime(file: string): number | undefined {
-  try { return fs.statSync(file).mtimeMs; } catch { return undefined; }
-}
 
 function findUp(dir: string, name: string): boolean {
   for (let d = path.resolve(dir); ; ) {

@@ -122,7 +122,19 @@ suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => 
   const api = () => vscode.extensions.getExtension<{testing: {schemaRoot(): {dir?: string; reason?: string} | undefined}}>('cuzic.svg-diagram-vscode')?.exports.testing;
   // the JSON language server's diagnostics have no `source`
   const jsonDiagnostics = (uri: vscode.Uri) => vscode.languages.getDiagnostics(uri).filter(d => d.source !== 'svg-diagram');
-  const show = async (uri: vscode.Uri) => vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+  // vscode.open: the workbench owns the document, so it closes with its tab (a document the extension host opened
+  // itself stays open for minutes, and would keep its project in the window's choice)
+  async function show(uri: vscode.Uri): Promise<vscode.TextEditor> {
+    await vscode.commands.executeCommand('vscode.open', uri);
+    const editor = vscode.window.activeTextEditor;
+    assert.equal(editor?.document.uri.toString(), uri.toString());
+    return editor;
+  }
+  async function close(uri: vscode.Uri): Promise<void> {
+    await show(uri);
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    await until(`${uri.path} closed`, () => (vscode.workspace.textDocuments.some(d => d.uri.toString() === uri.toString()) ? undefined : true));
+  }
   async function until<T>(what: string, get: () => T | undefined, timeoutMs = 15_000): Promise<T> {
     for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
       const v = get();
@@ -178,19 +190,22 @@ suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => 
     await errorsOf(uri);
   });
 
-  // last: the documents this suite opens stay open for minutes (VS Code keeps documents an extension opened)
-  test('a site.json in a folder without svg-diagram is not checked, nor (while it is open) the project\'s own', async function () {
+  test('a site.json of a folder without svg-diagram open beside the project\'s: neither is checked until it closes', async function () {
     this.timeout(60_000);
     const other = unrelated('site.json');
+    const own = fixture('json/site.json');
     await show(other);
     await noErrorsOf(other);
     assert.equal(api()?.schemaRoot()?.dir, undefined);
-    const own = fixture('json/site.json');
     await show(own);
     await noErrorsOf(own);
     await settle();
     assert.deepEqual(jsonDiagnostics(other).map(d => d.message), [], 'the unrelated site.json got the project\'s schema');
     assert.deepEqual(jsonDiagnostics(own).map(d => d.message), []);
-    assert.match(api()?.schemaRoot()?.reason ?? '', /両方を検査できない/);
+    assert.match(api()?.schemaRoot()?.reason ?? '', /unrelated\/site\.json（svg-diagram 無し）.*両方を検査できない/);
+    await close(other);
+    await errorsOf(own);
+    assert.ok(api()?.schemaRoot()?.dir);
   });
+
 });
