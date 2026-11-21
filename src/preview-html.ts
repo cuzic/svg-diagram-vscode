@@ -12,8 +12,15 @@ export function buildArgs(file: string, out: string): string[] {
  */
 export function buildErrorText(file: string, stderr: string): string {
   const lines = stderr.split(/\r?\n/).filter(s => s.trim() && !/DeprecationWarning|--trace-deprecation|^Node\.js v/.test(s));
-  // `✗ <source>: <message>`: the title already names the source, so the path goes
-  const failed = lines.filter(s => /^\s*✗ /.test(s)).map(s => s.trim().replace(/^✗ /, '')).map(s => (s.startsWith(`${file}: `) ? s.slice(file.length + 2) : s));
+  const failed = lines.filter(s => /^\s*✗ /.test(s)).map(s => {
+    const failure = s.trim().slice(2);
+    if (!failure.startsWith(`${file}:`)) return failure;
+    // The title already names the source.
+    const detail = failure.slice(file.length + 1);
+    const sameFile = detail.match(/^(\d+):\d+: (.*)$/);
+    if (sameFile) return `${sameFile[2]}（${sameFile[1]} 行目）`;
+    return detail.startsWith(' ') ? detail.slice(1) : failure;
+  });
   if (failed.length) return failed.join('\n');
   const crash = crashFinding(file, lines.join('\n'));
   if (crash.message !== 'check が JSON を出さずに失敗した') return crash.line ? `${crash.message}（${crash.line} 行目）` : crash.message;

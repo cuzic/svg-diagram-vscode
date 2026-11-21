@@ -11,6 +11,12 @@ test('buildErrorText: the ✗ lines of a newer core', () => {
   assert.equal(buildErrorText('/p/a.ts', stderr), 'diagram({theme}) must be one of 1, 2'); // the title names the file
 });
 
+test('buildErrorText: a same-file location shows only the message and line', () => {
+  const file = '/p/共有 図/a.ts';
+  const stderr = `✗ ${file}:12:5: Error: 幅が揃っていない\n`;
+  assert.equal(buildErrorText(file, stderr), 'Error: 幅が揃っていない（12 行目）');
+});
+
 test('buildErrorText: a 0.5.0 crash → the Error line and the line of the source', () => {
   const stderr = 'file:///p/a.ts:5\n  throw new Error(\'x\');\n\nError: fixture: 壊れた\n    at define (file:///p/a.ts:5:9)\n\nNode.js v26.13.0\n';
   assert.equal(buildErrorText('/p/a.ts', stderr), 'Error: fixture: 壊れた（5 行目）');
