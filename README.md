@@ -38,7 +38,9 @@
 
 - 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今はリリースの tarball から入れる: `pnpm add -D https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz`（ビルド不要。npm でも同じ URL）。「この案件で svg-diagram を使えるようにする」は npm から入れるので 0.5.0 になり、JSON は検査しない。
 - 案件の svg-diagram は、そのファイルから上の、ワークスペースフォルダの中の `node_modules/svg-diagram`。設定 `svgDiagram.cliPath`（ワークスペース・フォルダの設定）があればそれ。`PATH` の svg-diagram、ユーザー設定の `svgDiagram.cliPath`、フォルダの外の `node_modules` のものは、そのファイルから上に `.svg-diagram.json` があるときだけ使う（なければ、案件の `node_modules` のもの）。
-- **ウィンドウで 1 つの JSON Schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。開いている対象の JSON ファイル（`site.json`・デッキ・`.svg-diagram.json`）の案件の svg-diagram が、みな同じ schema のとき（同じ core を別のパスから使う pnpm のモノレポ、同じ版を入れた別のフォルダも同じ）に、それで検査する。svg-diagram と関係ない案件のファイルや、schema の違う svg-diagram の案件のファイルが一緒に開いているときは、どれも検査しない（関係ないファイルに誤りを出さないため。どちらかを閉じると検査する。ほかの拡張がタブなしで読んだファイルは、数分で閉じられる）。git の差分の片側のようにファイルでないものは、そのパスのファイルとして数える（ワークスペースの外のパスなら、どの案件か分からないので検査しない）。どれも開いていなければ、ワークスペースフォルダの svg-diagram がみな同じ schema のとき、それ。
+- **ウィンドウで 1 つの JSON Schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。開いている対象の JSON ファイル（`site.json`・デッキ・`.svg-diagram.json`）の案件の svg-diagram が、みな同じ schema のとき（同じ core を別のパスから使う pnpm のモノレポ、同じ版を入れた別のフォルダも同じ）に、それで検査する。svg-diagram と関係ない案件のファイルや、schema の違う svg-diagram の案件のファイルが一緒に開いているときは、どれも検査しない（関係ないファイルに誤りを出さないため。どちらかを閉じると検査する。ほかの拡張がタブなしで読んだファイルは、数分で閉じられる）。git の差分の片側のようにファイルでないものは、そのパスのファイルとして数える（ワークスペースの外のパスなら、どの案件か分からないので検査しない）。どれも開いていなければ、svg-diagram のあるワークスペースフォルダがみな同じ schema のとき、それ。
+- 関係ない案件のファイルを開いた直後の一瞬（0.1 秒ほど）、svg-diagram の誤りが出てから消えることがある（VS Code が先に検査するため）。
+- ワークスペースフォルダの外のファイル（フォルダを開かずにファイルだけ開いたときも）は、上に `.svg-diagram.json` があるときだけ検査する。
 - 開き直したファイルは案件を探し直す（ワークスペースフォルダより下のパッケージに svg-diagram を入れたときは、そのファイルを閉じて開き直すか、ウィンドウにフォーカスを戻す）。
 - svg-diagram が 0.8.0 より古いとき、設定 `svgDiagram.jsonSchemas.enabled` が false のときも検査しない。どれを使ったか・なぜ検査しないかは、出力ログに出る。
 - デッキが指す図の `.json` は名前が決まっていないので、先頭に `"$schema": "./node_modules/svg-diagram/schema/figure.schema.json"` を書く（パスはそのファイルから）。`"$schema"` を書いたファイルは、拡張によらず VS Code がそれに従う。

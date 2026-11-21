@@ -22,13 +22,16 @@ const AUTHORITY = 'schema';
 export const SCHEMA_FILES = ['spec.schema.json', 'figure.schema.json', 'deck.schema.json', 'site.schema.json', 'config.schema.json'] as const;
 export type SchemaFile = (typeof SCHEMA_FILES)[number];
 
-export const schemaUri = (file: SchemaFile): string => `${SCHEMA_SCHEME}://${AUTHORITY}/${file}`;
+export const schemaUri = (file: string): string => `${SCHEMA_SCHEME}://${AUTHORITY}/${file}`;
 
-/** The file a `svg-diagram-schema://schema/<file>` URI names, if it is one of ours. */
-export function schemaFileOf(uri: {authority: string; path: string}): SchemaFile | undefined {
+/**
+ * The file a `svg-diagram-schema://schema/<file>` URI names: any `<name>.schema.json` of the core's schema/ (a later
+ * core may split its schemas and $ref the new files; the five are the ones package.json names and the identity hashes).
+ */
+export function schemaFileOf(uri: {authority: string; path: string}): string | undefined {
   if (uri.authority !== AUTHORITY) return undefined;
   const name = uri.path.replace(/^\/+/, '');
-  return (SCHEMA_FILES as readonly string[]).includes(name) ? (name as SchemaFile) : undefined;
+  return /^[a-z0-9][a-z0-9.-]*\.schema\.json$/.test(name) && !name.includes('..') ? name : undefined;
 }
 
 /** The names package.json's `jsonValidation` gives a schema (kept in step by test/unit/manifest.test.ts). */
@@ -174,7 +177,7 @@ export function rootForOpen(open: ReadonlyArray<{name: string; root: SchemaRoot}
 export const sameRoot = (a: SchemaRoot | undefined, b: SchemaRoot): boolean => !!a && a.id === b.id;
 
 /** The text of one file of a root (accept everything when there is none, or it cannot be read). */
-export function schemaText(root: SchemaRoot, file: SchemaFile): string {
+export function schemaText(root: SchemaRoot, file: string): string {
   if (!root.dir) return ACCEPT_ALL;
   try { return fs.readFileSync(path.join(root.dir, file), 'utf8'); } catch { return ACCEPT_ALL; }
 }

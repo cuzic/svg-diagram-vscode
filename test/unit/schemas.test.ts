@@ -29,6 +29,9 @@ test('the URIs name the five files and come back to them; the relative $ref stay
   }
   assert.equal(new URL('spec.schema.json#/definitions/parts', schemaUri('deck.schema.json')).href, `${schemaUri('spec.schema.json')}#/definitions/parts`);
   assert.equal(schemaFileOf({authority: 'schema', path: '/other.json'}), undefined);
+  assert.equal(schemaFileOf({authority: 'schema', path: '/part-chevron.schema.json'}), 'part-chevron.schema.json'); // a later core's split file
+  assert.equal(schemaFileOf({authority: 'schema', path: '/../x.schema.json'}), undefined);
+  assert.equal(schemaFileOf({authority: 'schema', path: '/a/b.schema.json'}), undefined);
   assert.equal(schemaFileOf({authority: 'other', path: '/spec.schema.json'}), undefined);
 });
 

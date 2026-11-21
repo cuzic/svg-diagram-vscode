@@ -8,7 +8,7 @@
 // upgraded), all five files are announced as changed, so VS Code fetches them again together and re-checks the files.
 import path from 'node:path';
 import * as vscode from 'vscode';
-import {describeRoot, isSchemaTarget, onlyRoot, rootFor, rootForOpen, SCHEMA_FILES, SCHEMA_SCHEME, type SchemaProject, type SchemaRoot, sameRoot, schemaFileOf, schemaText, schemaUri} from './schemas.ts';
+import {describeRoot, isSchemaTarget, onlyRoot, rootFor, rootForOpen, SCHEMA_SCHEME, type SchemaProject, type SchemaRoot, sameRoot, schemaFileOf, schemaText, schemaUri} from './schemas.ts';
 
 export interface SchemaProviderDeps {
   /** The project of a file or a workspace folder. */
@@ -23,8 +23,8 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
   private readonly disposables: vscode.Disposable[] = [];
   private folderWatchers: vscode.Disposable[] = [];
   private root: SchemaRoot | undefined;
-  /** Has VS Code asked yet? (until then, a change need not be announced) */
-  private served = false;
+  /** The files VS Code has asked for (until then, a change need not be announced). */
+  private readonly served = new Set<string>();
   /** The root per directory of the open files (an open or close needs only the new file's); cleared by other refreshes. */
   private readonly byDir = new Map<string, SchemaRoot>();
 
@@ -62,7 +62,7 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
     const file = schemaFileOf(uri);
     if (!file) throw new Error(`${uri.toString()}: svg-diagram の JSON Schema ではない`);
     if (!this.root) this.setRoot(this.pick());
-    this.served = true;
+    this.served.add(file);
     return schemaText(this.root ?? {}, file);
   }
 
@@ -75,7 +75,7 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
     const root = this.pick();
     const changed = !sameRoot(this.root, root);
     if (changed || describeRoot(root) !== describeRoot(this.root ?? {})) this.setRoot(root);
-    if (changed && this.served) for (const file of SCHEMA_FILES) this.changed.fire(vscode.Uri.parse(schemaUri(file)));
+    if (changed) for (const file of this.served) this.changed.fire(vscode.Uri.parse(schemaUri(file)));
   }
 
   /** Which core the files come from now (the integration tests read it through the extension's exports). */
