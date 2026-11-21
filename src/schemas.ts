@@ -129,6 +129,7 @@ function contentId(dir: string): string | undefined {
   const key = stats.join('\n');
   let id = ids.get(key);
   if (!id) {
+    if (ids.size > 50) ids.clear(); // a core checkout regenerating its schemas: old keys are dead
     const hash = crypto.createHash('sha256');
     try {
       for (const f of SCHEMA_FILES) hash.update(fs.readFileSync(path.join(dir, f))).update('\0');
@@ -146,7 +147,7 @@ export function onlyRoot(roots: readonly SchemaRoot[]): SchemaRoot {
   const found = roots.filter(r => r.dir);
   const distinct = new Set(found.map(r => r.id));
   if (distinct.size === 1 && found[0]) return found[0];
-  if (distinct.size > 1) return {reason: 'svg-diagram が複数のフォルダにあるので、JSON のファイルを開くまで検査しない'};
+  if (distinct.size > 1) return {reason: 'schema の違う svg-diagram が複数のフォルダにあるので、JSON のファイルを開くまで検査しない'};
   return roots[0] ?? {reason: 'svg-diagram が見つからないので、JSON は検査しない'};
 }
 
@@ -161,9 +162,11 @@ export function rootForOpen(open: ReadonlyArray<{name: string; root: SchemaRoot}
   const other = open.find(o => o.root.id !== first.root.id);
   if (!other) return first.root;
   const [a, b] = first.root.dir ? [first, other] : [other, first];
-  const label = (r: SchemaRoot) => (r.dir ? `svg-diagram ${r.version ?? '(版不明)'}` : (r.label ?? 'svg-diagram 無し'));
+  const short = (r: SchemaRoot) => (r.dir ? `svg-diagram ${r.version ?? '(版不明)'}` : (r.label ?? 'svg-diagram 無し'));
+  // two cores of one version with different schemas (a checkout with edits): name them by place
+  const label = (r: SchemaRoot) => (short(a.root) === short(b.root) && r.dir ? `${short(r)}、${r.dir}` : short(r));
   return {
-    reason: `${a.name}（${label(a.root)}）と ${b.name}（${label(b.root)}）が開いていて、1 つの JSON Schema では両方を検査できないので、JSON は検査しない（どちらかを閉じると検査する。タブが無いなら、ほかの拡張が読んだもので、数分で閉じられる）`,
+    reason: `${a.name}（${label(a.root)}）と ${b.name}（${label(b.root)}）が開いていて、1 つの JSON Schema では両方を検査できないので、JSON は検査しない（閉じて揃うと検査する。タブが無いなら、ほかの拡張が読んだもので、数分で閉じられる）`,
   };
 }
 

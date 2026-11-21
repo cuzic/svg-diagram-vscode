@@ -135,8 +135,13 @@ test('sameRoot: what is served; a core upgraded in place is new, and accept-all 
   const a = rootFor({cli, folder: tmp});
   assert.ok(sameRoot(a, rootFor({cli, folder: tmp})));
   assert.ok(!sameRoot(undefined, a));
-  // pnpm: unchanged files keep their times; only deck.schema.json changes
-  fs.writeFileSync(path.join(dir, 'schema', 'deck.schema.json'), JSON.stringify({title: 'deck 0.8.1'}));
+  // pnpm: unchanged files keep their times; only deck.schema.json changes, here to the same size (only its time differs)
+  const deck = path.join(dir, 'schema', 'deck.schema.json');
+  const before = fs.readFileSync(deck, 'utf8');
+  fs.writeFileSync(deck, before.replace('0.8.0', '0.8.1'));
+  assert.equal(fs.statSync(deck).size, Buffer.byteLength(before));
+  const later = new Date(Date.now() + 5000);
+  fs.utimesSync(deck, later, later);
   assert.ok(!sameRoot(a, rootFor({cli: {...cli, version: '0.8.1'}, folder: tmp})));
   assert.ok(!sameRoot(a, rootFor({})));
   assert.ok(sameRoot(rootFor({}), {reason: 'another reason'}));

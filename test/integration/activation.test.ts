@@ -1,5 +1,7 @@
 // Runs inside a real VS Code (pnpm test:integration; CI runs it under xvfb).
 import * as assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import * as vscode from 'vscode';
 
 suite('activation', () => {
@@ -194,10 +196,9 @@ suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => 
     this.timeout(60_000);
     const other = unrelated('site.json');
     const own = fixture('json/site.json');
-    await show(other);
-    await noErrorsOf(other);
-    assert.equal(api()?.schemaRoot()?.dir, undefined);
     await show(own);
+    await errorsOf(own); // the schema is live
+    await show(other);
     await noErrorsOf(own);
     await settle();
     assert.deepEqual(jsonDiagnostics(other).map(d => d.message), [], 'the unrelated site.json got the project\'s schema');
@@ -206,6 +207,50 @@ suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => 
     await close(other);
     await errorsOf(own);
     assert.ok(api()?.schemaRoot()?.dir);
+  });
+
+  test('a document that is not a file (the git side of a diff) counts as the file of its path', async function () {
+    this.timeout(60_000);
+    const own = fixture('json/site.json');
+    await show(own);
+    await errorsOf(own);
+    // like git:, a scheme that carries the file's path
+    const scheme = 'svgd-test-rev';
+    const reg = vscode.workspace.registerTextDocumentContentProvider(scheme, {provideTextDocumentContent: () => '{\n  "pages": ["a"],\n  "theme": "x"\n}\n'});
+    try {
+      const rev = unrelated('site.json').with({scheme, query: 'ref=HEAD'});
+      await show(rev);
+      await noErrorsOf(own);
+      await settle();
+      assert.deepEqual(jsonDiagnostics(rev).map(d => d.message), [], 'the revision of the unrelated site.json got the project\'s schema');
+      await close(rev);
+      await errorsOf(own);
+    } finally {
+      reg.dispose();
+    }
+  });
+
+  test('a core installed below the folder is seen when its file is reopened', async function () {
+    this.timeout(60_000);
+    const pkg = unrelated('pkg').fsPath;
+    const site = vscode.Uri.file(path.join(pkg, 'site.json'));
+    fs.mkdirSync(pkg, {recursive: true});
+    fs.writeFileSync(site.fsPath, '{\n  "decks": [],\n  "colour": 1\n}\n');
+    try {
+      await show(site);
+      await settle();
+      assert.deepEqual(jsonDiagnostics(site).map(d => d.message), []);
+      // pnpm -F pkg add …: a link into the store, below the workspace folder (not watched)
+      fs.mkdirSync(path.join(pkg, 'node_modules'));
+      fs.symlinkSync(fixture('node_modules/svg-diagram').fsPath, path.join(pkg, 'node_modules', 'svg-diagram'));
+      await close(site);
+      await show(site);
+      const found = await errorsOf(site);
+      assert.ok(found.some(d => /colour/.test(d.message)), found.map(d => d.message).join(' / '));
+      await close(site);
+    } finally {
+      fs.rmSync(pkg, {recursive: true, force: true});
+    }
   });
 
 });

@@ -3,8 +3,8 @@
 //
 // The root is the one the open JSON files that get a schema (site.json, deck.json, …) agree on; when files of projects
 // with different schemas are open (or one of a project without svg-diagram), nothing is checked until one closes. With
-// none open (or only ones outside the file system, such as the git side of a diff), it is the one workspace folder that
-// has svg-diagram. When what is served changes (such a file opened or closed, a setting changed, svg-diagram installed or
+// none open, it is the workspace folders' svg-diagram when they all have the same schemas. A document that is not a file
+// (the git side of a diff) counts as the file whose path it carries. When what is served changes (such a file opened or closed, a setting changed, svg-diagram installed or
 // upgraded), all five files are announced as changed, so VS Code fetches them again together and re-checks the files.
 import path from 'node:path';
 import * as vscode from 'vscode';
@@ -37,8 +37,21 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
       configs.onDidCreate(() => this.refresh()),
       configs.onDidDelete(() => this.refresh()),
       // the JSON server checks the open documents (not only the visible ones): follow those
-      vscode.workspace.onDidOpenTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(false); }),
-      vscode.workspace.onDidCloseTextDocument(d => { if (this.isTarget(d.uri)) this.refresh(false); }),
+      // an opened file's project is looked up again (closing and reopening is how a user retries); a closed one's is
+      // forgotten when no other open file shares its directory
+      vscode.workspace.onDidOpenTextDocument(d => {
+        if (!this.isTarget(d.uri)) return;
+        const file = this.fileOf(d.uri);
+        if (file) this.byDir.delete(path.dirname(file.fsPath));
+        this.refresh(false);
+      }),
+      vscode.workspace.onDidCloseTextDocument(d => {
+        if (!this.isTarget(d.uri)) return;
+        const file = this.fileOf(d.uri);
+        const dir = file && path.dirname(file.fsPath);
+        if (dir && !this.openTargets().some(o => o.file && path.dirname(o.file.fsPath) === dir)) this.byDir.delete(dir);
+        this.refresh(false);
+      }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => { this.watchFolders(); this.refresh(); }),
       vscode.workspace.registerTextDocumentContentProvider(SCHEMA_SCHEME, this),
     );
@@ -79,9 +92,10 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
     if (!vscode.workspace.getConfiguration('svgDiagram').get<boolean>('jsonSchemas.enabled', true)) {
       return {reason: '設定 svgDiagram.jsonSchemas.enabled が false なので、JSON は検査しない'};
     }
-    const open = vscode.workspace.textDocuments
-      .filter(d => this.isTarget(d.uri))
-      .map(d => ({name: vscode.workspace.asRelativePath(d.uri), root: this.rootOf(d.uri)}));
+    const open = this.openTargets().map(({doc, file}) => ({
+      name: vscode.workspace.asRelativePath(doc.uri),
+      root: file ? this.rootOf(file) : {reason: `${doc.uri.toString(true)} はファイルでなく、どの案件のものか分からない`, label: 'ファイルでない'},
+    }));
     return rootForOpen(open) ?? onlyRoot((vscode.workspace.workspaceFolders ?? []).map(f => rootFor(this.deps.projectOf(f.uri))));
   }
 
@@ -95,8 +109,23 @@ export class SchemaProvider implements vscode.TextDocumentContentProvider, vscod
     return root;
   }
 
+  /**
+   * The JSON server checks every open document that matches, whatever its scheme. A document that is not a file (the
+   * git side of a diff, a commit view) counts as the file whose path it carries, when that is in a workspace folder;
+   * otherwise its project is unknown, and it turns the checks off rather than get another project's schema.
+   */
   private isTarget(uri: vscode.Uri): boolean {
-    return uri.scheme === 'file' && isSchemaTarget(uri.fsPath);
+    return uri.scheme !== SCHEMA_SCHEME && isSchemaTarget(uri.path);
+  }
+
+  private fileOf(uri: vscode.Uri): vscode.Uri | undefined {
+    if (uri.scheme === 'file') return uri;
+    const file = vscode.Uri.file(uri.path);
+    return vscode.workspace.getWorkspaceFolder(file) ? file : undefined;
+  }
+
+  private openTargets(): {doc: vscode.TextDocument; file: vscode.Uri | undefined}[] {
+    return vscode.workspace.textDocuments.filter(d => this.isTarget(d.uri)).map(doc => ({doc, file: this.fileOf(doc.uri)}));
   }
 
   /**
