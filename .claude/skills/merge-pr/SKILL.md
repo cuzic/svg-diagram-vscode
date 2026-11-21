@@ -11,7 +11,8 @@ Claude(または owner)が行う。main の取り込みや衝突解消は自分�
 ## 前提(1 つでも欠けたら止める)
 
 - 最新ラウンドのレビュー(PR ブランチにコミット済みの `docs/reviews/prNN-roundK.md`)が converged: yes で、`Target: <branch> @ <sha>` がある。
-- PR の base が main(`gh pr view NN --json baseRefName --jq .baseRefName`)。
+- PR の base が main(`gh pr view NN --json baseRefName --jq .baseRefName`)。積み上げ PR は、下の PR がマージされて付け替わってから扱う。
+- レビュアーが「マージ前に直して」と書いた項目があれば、直っている。
 
 ## 手順
 
@@ -42,7 +43,11 @@ Claude(または owner)が行う。main の取り込みや衝突解消は自分�
    ```
 
    `n -ge 5` は今の CI のジョブ数(test と、e2e の ubuntu・macOS × 1.100.0・stable)。ジョブを増減したらここも直す。
+   checks が 0 件(push の直後)・取れない・pending・`UNKNOWN` は、どれも止まる側に倒れる。少し置いてやり直す。
    CONFLICTING なら Codex に main の取り込みを頼み、手順 1 からやり直す。
+   **main が動いていないかも見る**: `mb=$(git merge-base origin/main "$SHA"); git diff --stat "$mb" origin/main -- src test package.json | tail -3`。
+   何か出たら Codex に main の取り込みを頼み、CI が回り直してから手順 1 からやり直す。
+   CI が PR と関係ない理由(flaky など)で落ちたら、マージせずに、その原因を直す PR を別に作る。
 3. **固定した head でマージする**:
 
    ```sh
@@ -52,7 +57,7 @@ Claude(または owner)が行う。main の取り込みや衝突解消は自分�
 
    head が動いていれば拒否されるので、手順 1 からやり直す。
 4. ブランチを消す前に、それを base にしている PR を main に向ける(`gh pr list --base <branch>` → `gh pr edit N --base main`)。
-5. core の ADR の段階を拡張の側で使う PR なら、README の「core の版」の説明と CHANGELOG が更新されているかを見る。無ければ follow-up の仕様に入れる。
+5. core の ADR の段階を拡張の側で使う PR なら、README(「対応する環境」と、その機能の節)と CHANGELOG が更新されているかを見る。無ければ follow-up の仕様に入れる。
 
 ## 報告
 

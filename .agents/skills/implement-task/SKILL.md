@@ -17,7 +17,7 @@ AGENTS.md の規則(完了の定義・コードの約束・Git の約束)が前�
 
 ## 2. ブランチ
 
-- いまの checkout が仕様のブランチになっている(`git branch --show-current` で確かめる)。違えば止める。
+- いまの checkout が仕様のブランチになっている(`git branch --show-current` で確かめる)。違えば止める。別の clone や worktree は作らない。
 - 既存 PR のブランチなら、始める前に `git pull --no-rebase origin <branch>`。
 - main の取り込み: `git merge origin/main`。手で衝突を解いたら、マージコミットのメッセージに「どのファイルを、どう解いたか」を書く。
 
@@ -27,7 +27,7 @@ AGENTS.md の規則(完了の定義・コードの約束・Git の約束)が前�
 2. **再現テストを先に書き、落ちることを確かめる**(落ちなければ、テストか理解が違う)。
 3. 実装する。仕様の「やらないこと」と「触ってよいファイル」を守る。周りの書き方に合わせる。
 4. 完了の定義を回す(`pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build --production`)。
-   結合テストは `xvfb-run -a pnpm test:integration`(xvfb が無ければ回さず、報告に not-run と書く。CI が回す)。
+   結合テストと e2e は sandbox では回さず、報告に `not-run`(CI が回す)と書く。
 5. 変異を当てる: 新しいコードの要の 1〜3 か所を手で壊し、テストが落ちることを確かめて、元に戻す(変異はコミットしない)。
 6. 設定・コマンドを変えたら `package.json` の `contributes`・`test/unit/manifest.test.ts`・README・CHANGELOG を合わせる。
 

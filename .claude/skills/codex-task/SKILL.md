@@ -1,6 +1,6 @@
 ---
 name: codex-task
-description: svg-diagram-vscode(VS Code 拡張)の実装・レビュー指摘の修正・main の取り込みを Codex に渡す。タスク仕様(Issue か PR コメント)を書き、scripts/run-codex.sh で codex exec を走らせ、報告を読む。「実装して」「直して」「Codex に任せて」と言われたとき、決まった機能や core の ADR の拡張の側に着手するときに使う。
+description: svg-diagram-vscode(VS Code 拡張)の実装・レビュー指摘の修正・main の取り込みを Codex に渡す。タスク仕様(Issue か PR コメント)を書き、scripts/run-codex.sh で codex exec を走らせ、報告を読む。「実装して」「Codex に直させて」「Codex に任せて」と言われたとき、レビュー指摘の修正を渡すとき、決まった機能や core の ADR の拡張の側に着手するときに使う。
 argument-hint: "[ADR の段階 | PR 番号]"
 ---
 
@@ -26,7 +26,7 @@ Codex は AGENTS.md と `.agents/skills/implement-task` を読むが、この会
 - レビュー: docs/reviews/prNN-roundK.md の M1, m2(修正のとき)
 
 ### ブランチ
-- 新規: `<prefix>/<name>` を origin/main から。PR のタイトル: `<…>(ADR NNNN U1)`
+- 新規: `<prefix>/<name>`(run-codex.sh が origin/main から作って切り替えてある。積み上げなら下のブランチから)。積み上げの PR はタイトルに `stacked on #NN`
 - 既存 PR: `<branch>` に追加コミット。merge で追従し、force-push しない
 
 ### スコープ
@@ -53,8 +53,12 @@ PR 本文に、ADR のどの決定を実装したか、テスト、変異、Open
 **バックグラウンドで**走らせる(Bash の `run_in_background: true`。数十分かかる):
 
 ```sh
-CODEX_WORK=<scratchpad>/codex sh .claude/skills/codex-task/scripts/run-codex.sh <label> <branch> <spec-file>
+CODEX_WORK=<scratchpad>/codex sh .claude/skills/codex-task/scripts/run-codex.sh <label> <branch> <spec-file> [base]
 ```
+
+- `base` は新しいブランチの元(既定 main)。積み上げの PR は下のブランチを渡す。ローカルにしかないブランチは断る(先に push する)。
+- 同じ label の前の clone に、origin に無いコミットがあれば断る(消さない)。
+- 終了コードが 0 でも報告が無ければ失敗として扱う(スクリプトが 1 を返す)。
 
 - Codex はスクラッチの clone(`cx-<label>`)で動き、push と `gh pr create` まで自分で行う。
 - 同時に走らせるのは 2 つまで。同じブランチに 2 つ走らせない。

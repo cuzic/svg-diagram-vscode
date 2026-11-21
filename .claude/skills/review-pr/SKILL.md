@@ -14,6 +14,7 @@ Claude 本体はレビューしない。**Opus のサブエージェント(Agent
 
 1. **独立したコピーで作業する**: スクラッチ領域に `git clone --reference <共有の checkout の .git> https://github.com/cuzic/svg-diagram-vscode <dir>`、
    `gh pr checkout NN`。レビューする head の SHA(`git rev-parse HEAD`)を控える。共有の checkout や他の worktree を触らない。
+   作業中の worktree を `cp -a` しない(git のメタデータを共有して他の作業を壊す)。他のエージェントのプロセスを `pkill` で止めない。
 2. **前ラウンドの解消を確かめる**: 指摘ごとに、説明文ではなく挙動で判定する。
 3. **壊しにいく**: 仕様と根拠の決め事ごとに、それを破る状況を作る。本物の VS Code で試す(結合テストの形の使い捨てのテストを、
    スクラッチの写しで `vscode-test` で回す。画面が無ければ `--ozone-platform=headless` の設定で)。重点:

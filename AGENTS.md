@@ -15,6 +15,7 @@ svg-diagram(core。別のリポジトリ `cuzic/svg-diagram`)の VS Code 拡張�
 - 仕事は「タスク仕様」で渡す。新しい作業は `[codex] …` の Issue、既存 PR への修正はその PR の `## [codex] タスク仕様` コメント。
 - レビュー指摘の根拠は、PR ブランチにコミットされた `docs/reviews/prNN-roundK.md`。
 - **仕様に無い判断が要るときは、実装で決めない。** PR 本文の「Open questions」に書いて止める。
+- Codex は `run-codex.sh`(`.claude/skills/codex-task/scripts/`)が作った clone の中で、仕様のブランチに切り替わった状態で始まる。別の clone や worktree は作らない。
 
 ## 完了の定義(どの PR も)
 
@@ -26,8 +27,9 @@ pnpm build --production
 ```
 
 - 4 つとも通ること。
-- 結合テスト(`pnpm test:integration`。本物の VS Code を開く。画面が要るので Linux は `xvfb-run -a`)と
-  e2e(`pnpm test:e2e`。Playwright で VS Code を操作する)は CI が回す。手元で回せなければ「CI に任せた」と報告に書く。
+- 結合テスト(`pnpm test:integration`。本物の VS Code を開く。先に `test/fixtures/workspace` で `npm install --no-package-lock`、画面が要るので Linux は `xvfb-run -a`)と
+  e2e(`pnpm test:e2e`。Playwright で VS Code を操作する)は CI が回す。Codex の sandbox では画面も VS Code の起動も用意が無いので、
+  回さずに報告で `not-run` とする(CI が判定する)。
   VS Code の API の振る舞いに頼る変更(診断・プレビュー・ファイルの監視・JSON の検査)には、結合テストを足す。
 - **先に再現テストを書く。** 直す前に落ちることを確かめてから直す。
 - 新しいコードには、それを壊す変異(手書きでよい)を最低 1 つ当て、テストが落ちることを確かめる。PR 本文に書く。
@@ -61,6 +63,7 @@ pnpm build --production
 | --- | --- |
 | `src/extension.ts` | 起動、コマンド、設定、各機能の組み立て |
 | `src/cli.ts`, `src/exec.ts`, `src/runs.ts` | core の CLI を探す(設定 → 案件の `node_modules` → PATH)、走らせる、走りの管理 |
+| `docs/reviews/` | レビュー記録(最初のレビューで作られる) |
 | `src/check.ts`, `src/diagnostics.ts` | `check --format json` を波線に(位置が無い指摘はラベルを探す) |
 | `src/preview.ts`, `src/preview-html.ts` | ライブプレビュー(`build` の SVG を webview に) |
 | `src/schemas.ts`, `src/schema-provider.ts` | JSON の補完と検査(core の `schema/` を `svg-diagram-schema:` で配る) |
