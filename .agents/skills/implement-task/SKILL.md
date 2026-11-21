@@ -29,6 +29,7 @@ AGENTS.md の規則(完了の定義・コードの約束・Git の約束)が前�
 4. 完了の定義を回す(`pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build --production`)。
    結合テストと e2e は sandbox では回さず、報告に `not-run`(CI が回す)と書く。
 5. 変異を当てる: 新しいコードの要の 1〜3 か所を手で壊し、テストが落ちることを確かめて、元に戻す(変異はコミットしない)。
+   結合テストでしか確かめられないコード(VS Code の API に頼る所)は、当てる変異と、落ちるはずの結合テストを PR 本文に書き、報告では `NOT RUN (integration)` とする。レビューで確かめる。
 6. 設定・コマンドを変えたら `package.json` の `contributes`・`test/unit/manifest.test.ts`・README・CHANGELOG を合わせる。
 
 ## 4. コミットと PR
@@ -36,7 +37,7 @@ AGENTS.md の規則(完了の定義・コードの約束・Git の約束)が前�
 - 小さなコミットに分ける。メッセージは日本語、`feat(area): …(ADR NNNN U1)`。指摘を直すコミットには指摘 ID。
   末尾に `Co-Authored-By: Codex <noreply@openai.com>`。
 - push: 新しいブランチは `git push -u origin <branch>`、既存は `git push origin <branch>`。force-push しない。
-- PR: 新しければ `gh pr create --base main --title … --body-file …`、既存なら本文を `gh pr edit` で更新。
+- PR: 新しければ `gh pr create --base <仕様のブランチの元。積み上げなら下のブランチ、ほかは main> --title … --body-file …`、既存なら本文を `gh pr edit` で更新。
   本文: 目的と ADR の節、変更の要点、テスト、変異(変えた所 → 落ちたテスト)、結合テスト・e2e、指摘 → 修正の表(修正のとき)、Open questions。
 - **マージしない。** レビューとマージは Claude が行う。
 
