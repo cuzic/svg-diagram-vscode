@@ -51,6 +51,37 @@ test('placeFinding: a column at a non-identifier marks one character', () => {
   assert.deepEqual([start, end], [9, 10]);
 });
 
+test('placeFinding: a column beyond the text marks the whole line', () => {
+  const text = '  box()';
+  for (const column of [text.length + 1, 50]) {
+    const {line, start, end, approximate} = placeFinding(f({line: 1, column}), text);
+    assert.deepEqual({line, start, end, approximate}, {line: 0, start: 2, end: text.length, approximate: false});
+  }
+});
+
+test('placeFinding: a leading keyword gives way to the following identifier', () => {
+  for (const [before, prefix, identifier] of [
+    ['  throw ', 'new ', 'Error'], ['  ', 'await ', 'define'], ['  ', 'typeof\t', 'box'], ['  ', 'await new ', 'Example'],
+  ] as const) {
+    const text = `${before}${prefix}${identifier}()`;
+    const {start, end} = placeFinding(f({line: 1, column: before.length + 1}), text);
+    assert.equal(start, before.length + prefix.length, text);
+    assert.equal(text.slice(start, end), identifier, text);
+  }
+  for (const text of ['new.target', 'await()', 'typeofThing()']) {
+    const {start, end} = placeFinding(f({line: 1, column: 1}), text);
+    assert.equal(text.slice(start, end), text.split(/[.(]/)[0]);
+  }
+});
+
+test('placeFinding: a zero-width non-joiner or joiner can continue an identifier', () => {
+  for (const joiner of ['\u200c', '\u200d']) {
+    const identifier = `shared${joiner}Box`;
+    const {start, end} = placeFinding(f({line: 1, column: 1}), `${identifier}()`);
+    assert.deepEqual([start, end], [0, identifier.length]);
+  }
+});
+
 test('placeFinding: a location in a helper marks the first line and links to the helper', () => {
   const entry = f({file: 'a.ts', location: {file: '../parts/共通.ts', line: 6, column: 4}, data: {band: '「受付」', fix: '幅を揃える'}});
   const {findings: [finding]} = parseCheckOutput(JSON.stringify({findings: [entry]}), '/work/diagrams');
@@ -87,6 +118,26 @@ test('placeFinding: related locations resolve against the CLI cwd and link to ea
     {file: path.resolve('/work/parts.ts'), line: 4, column: 9, label: '相手'},
     {file: path.resolve('/work/diagrams/a.ts'), line: 3, column: 27, label: '相手'},
   ]);
+});
+
+test('placeFinding and findingMessage skip invalid CLI positions and keep valid ones', () => {
+  for (const invalid of [{line: 0, column: 3}, {line: 4}, {line: 2, column: 0}, {line: 1.5, column: 2}]) {
+    const bad = {file: 'bad.ts', ...invalid};
+    const {findings: [finding]} = parseCheckOutput(JSON.stringify({findings: [{
+      ...f({file: 'a.ts', data: {band: '「受付」', fix: '幅を揃える'}}),
+      location: bad,
+      via: [invalid, {line: 3, column: 7}],
+      related: [bad, {file: 'parts.ts', line: 4, column: 9}],
+    }]}), '/p');
+    assert.ok(finding);
+    const {line, relatedInformation} = placeFinding(finding, src);
+    assert.equal(line, 2);
+    assert.deepEqual(relatedInformation, [
+      {file: path.resolve('/p/a.ts'), line: 3, column: 7, label: '呼び出し元'},
+      {file: path.resolve('/p/parts.ts'), line: 4, column: 9, label: '相手'},
+    ]);
+    assert.equal(findingMessage(finding), 'm\n直し方: 幅を揃える');
+  }
 });
 
 test('placeFinding: no line, the band label found once → on the label', () => {

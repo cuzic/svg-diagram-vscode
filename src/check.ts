@@ -79,6 +79,13 @@ export function parseCheckOutput(stdout: string, cwd: string): CheckOutput {
   };
 }
 
+function isSourcePosition(p: SourcePosition | undefined): p is SourcePosition {
+  return !!p && Number.isInteger(p.line) && p.line >= 1 && Number.isInteger(p.column) && p.column >= 1;
+}
+
+const identifier = /^[$_\p{ID_Start}](?:[$\p{ID_Continue}]|\u200c|\u200d)*/u;
+const leadingKeywords = /^(?:(?:new|await|typeof|void|delete|throw|return|yield)\s+)+/u;
+
 /**
  * Where a finding goes in its source text. A CLI line wins. A location in another file goes on the first line.
  * Otherwise a layout finding names its band (`data.band` = 「受付」). A unique string literal puts the squiggle there.
@@ -87,23 +94,35 @@ export function parseCheckOutput(stdout: string, cwd: string): CheckOutput {
 export function placeFinding(f: Finding, text: string | undefined): Placed {
   const lines = text?.split(/\r?\n/) ?? [];
   const relatedInformation: RelatedInformation[] = [];
-  if (f.location) relatedInformation.push({...f.location, label: '指摘箇所'});
-  for (const p of f.via ?? []) relatedInformation.push({...p, file: f.file, label: '呼び出し元'});
-  for (const p of f.related ?? []) relatedInformation.push({...p, label: '相手'});
+  const loc = isSourcePosition(f.location) ? f.location : undefined;
+  if (loc) relatedInformation.push({...loc, label: '指摘箇所'});
+  for (const p of f.via ?? []) {
+    if (isSourcePosition(p)) relatedInformation.push({...p, file: f.file, label: '呼び出し元'});
+  }
+  for (const p of f.related ?? []) {
+    if (isSourcePosition(p)) relatedInformation.push({...p, label: '相手'});
+  }
   const placed = {file: f.file, finding: f, ...(relatedInformation.length ? {relatedInformation} : {})};
   if (f.line && f.line >= 1) {
     const i = f.line - 1;
     const s = lines[i] ?? '';
-    if (f.column && f.column >= 1) {
+    if (f.column && f.column >= 1 && f.column <= s.length) {
       const start = f.column - 1;
-      const token = s.slice(start).match(/^(?:[$_\p{ID_Start}](?:[$\p{ID_Continue}]|\u200c|\u200d)*|.)/u)?.[0];
+      const tail = s.slice(start);
+      const prefix = tail.match(leadingKeywords)?.[0];
+      const operand = prefix && tail.slice(prefix.length).match(identifier)?.[0];
+      if (prefix && operand) {
+        const operandStart = start + prefix.length;
+        return {...placed, line: i, start: operandStart, end: operandStart + operand.length, approximate: false};
+      }
+      const token = tail.match(identifier)?.[0] ?? tail.match(/^./u)?.[0];
       return {...placed, line: i, start, end: start + (token?.length ?? 1), approximate: false};
     }
     const start = s.length - s.trimStart().length;
     return {...placed, line: i, start, end: Math.max(s.length, start + 1), approximate: false};
   }
   const label = f.data?.band?.match(/^「(.+)」$/)?.[1];
-  if (!f.location && label && text) {
+  if (!loc && label && text) {
     const hits: {line: number; col: number}[] = [];
     lines.forEach((s, line) => {
       for (const q of ["'", '"', '`']) {
@@ -121,7 +140,7 @@ export function placeFinding(f: Finding, text: string | undefined): Placed {
 /** The message as shown: the CLI's message, then how to fix it when the CLI says. */
 export function findingMessage(f: Finding): string {
   const loc = f.location;
-  const message = loc ? `${path.basename(loc.file)}:${loc.line}:${loc.column}: ${f.message}` : f.message;
+  const message = isSourcePosition(loc) ? `${path.basename(loc.file)}:${loc.line}:${loc.column}: ${f.message}` : f.message;
   return f.data?.fix ? `${message}\n直し方: ${f.data.fix}` : message;
 }
 
