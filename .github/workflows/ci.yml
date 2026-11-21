@@ -18,7 +18,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build --production
-      # the fixture workspace runs the published core (npm, not part of this pnpm workspace)
+      # the fixture workspace runs core v0.8.0 from its GitHub release tarball (not part of this pnpm workspace)
       - run: npm install --no-package-lock --no-audit --no-fund
         working-directory: test/fixtures/workspace
       # VS Code itself is downloaded by @vscode/test-electron and needs a display

@@ -1,5 +1,7 @@
 // Runs inside a real VS Code (pnpm test:integration; CI runs it under xvfb).
 import * as assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import * as vscode from 'vscode';
 
 suite('activation', () => {
@@ -19,7 +21,7 @@ suite('cli', () => {
 });
 
 suite('check → Problems', () => {
-  // test/fixtures/workspace has svg-diagram 0.5.0 in node_modules (CI: npm install there before the run)
+  // test/fixtures/workspace has svg-diagram 0.8.0 (the GitHub release tarball) in node_modules (CI: npm install there before the run)
   const folder = () => vscode.workspace.workspaceFolders?.[0]?.uri;
 
   async function diagnosticsOf(name: string, timeoutMs = 60_000): Promise<vscode.Diagnostic[]> {
@@ -41,11 +43,12 @@ suite('check → Problems', () => {
     assert.equal(d?.severity, vscode.DiagnosticSeverity.Warning);
   });
 
-  test('a source that throws is a build-error on the line that threw', async () => {
+  test('a source that throws is a build-error', async () => {
     const [d] = await diagnosticsOf('broken.diagram.ts');
     assert.equal(d?.code, 'build-error');
     assert.equal(d?.severity, vscode.DiagnosticSeverity.Error);
-    assert.equal(d?.range.start.line, 4); // `throw new Error(...)` is line 5
+    // core 0.8.0 reports it in its JSON, without a line (0.5.0 crashed, and the line came from the stack): the first line
+    assert.equal(d?.range.start.line, 0);
     assert.match(d?.message ?? '', /わざと壊した図/);
   });
 });
@@ -105,4 +108,149 @@ suite('shared parts', () => {
     const api = vscode.extensions.getExtension<{testing: {previewMessage(): {file?: string} | undefined}}>('cuzic.svg-diagram-vscode')?.exports;
     assert.notEqual(api?.testing.previewMessage()?.file, uri.fsPath);
   });
+});
+
+suite('JSON Schemas (from the fixture core, svg-diagram 0.8.0 or later)', () => {
+  const fixture = (name: string) => {
+    const base = vscode.workspace.workspaceFolders?.[0]?.uri;
+    assert.ok(base);
+    return vscode.Uri.joinPath(base, name);
+  };
+  const unrelated = (name: string) => {
+    const base = vscode.workspace.workspaceFolders?.find(f => f.name === 'unrelated')?.uri;
+    assert.ok(base, 'the integration tests run in test/fixtures/multi-root.code-workspace');
+    return vscode.Uri.joinPath(base, name);
+  };
+  const api = () => vscode.extensions.getExtension<{testing: {schemaRoot(): {dir?: string; reason?: string} | undefined}}>('cuzic.svg-diagram-vscode')?.exports.testing;
+  // the JSON language server's diagnostics have no `source`
+  const jsonDiagnostics = (uri: vscode.Uri) => vscode.languages.getDiagnostics(uri).filter(d => d.source !== 'svg-diagram');
+  // vscode.open: the workbench owns the document, so it closes with its tab (a document the extension host opened
+  // itself stays open for minutes, and would keep its project in the window's choice)
+  async function show(uri: vscode.Uri): Promise<vscode.TextEditor> {
+    await vscode.commands.executeCommand('vscode.open', uri);
+    const editor = vscode.window.activeTextEditor;
+    assert.equal(editor?.document.uri.toString(), uri.toString());
+    return editor;
+  }
+  async function close(uri: vscode.Uri): Promise<void> {
+    await show(uri);
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    await until(`${uri.path} closed`, () => (vscode.workspace.textDocuments.some(d => d.uri.toString() === uri.toString()) ? undefined : true));
+  }
+  async function until<T>(what: string, get: () => T | undefined, timeoutMs = 15_000): Promise<T> {
+    for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
+      const v = get();
+      if (v !== undefined) return v;
+    }
+    assert.fail(`${what} within ${timeoutMs}ms`);
+  }
+  const errorsOf = (uri: vscode.Uri) => until(`json diagnostics for ${uri.path}`, () => { const d = jsonDiagnostics(uri); return d.length ? d : undefined; });
+  const noErrorsOf = (uri: vscode.Uri) => until(`no json diagnostics for ${uri.path} (${jsonDiagnostics(uri).map(d => d.message).join(' / ')})`, () => (jsonDiagnostics(uri).length ? undefined : true));
+  const settle = () => new Promise(r => setTimeout(r, 3000)); // long enough for the JSON server to have checked the file
+
+  teardown(async () => {
+    await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', undefined, vscode.ConfigurationTarget.Global);
+  });
+
+  test('site.json is checked against site.schema.json', async () => {
+    const uri = fixture('json/site.json');
+    await show(uri);
+    const found = await errorsOf(uri);
+    assert.ok(found.some(d => /colour/.test(d.message) && d.range.start.line === 2), found.map(d => d.message).join(' / '));
+    assert.match(api()?.schemaRoot()?.dir ?? '', /node_modules[\\/]svg-diagram[\\/]schema$/);
+  });
+
+  test('.svg-diagram.json is checked against config.schema.json', async () => {
+    const uri = fixture('json/.svg-diagram.json');
+    await show(uri);
+    const found = await errorsOf(uri);
+    assert.ok(found.some(d => /colour/.test(d.message)), found.map(d => d.message).join(' / '));
+    assert.ok(found.some(d => d.range.start.line === 1), `outDir: 1 is not flagged: ${found.map(d => d.message).join(' / ')}`);
+  });
+
+  test('a deck: the figure path message, and every part type is offered (spec.schema.json through the relative $ref)', async () => {
+    const uri = fixture('json/deck.json');
+    const editor = await show(uri);
+    const found = await errorsOf(uri);
+    assert.ok(found.some(d => /ends in \.ts or \.json/.test(d.message) && d.range.start.line === 3), found.map(d => d.message).join(' / '));
+    const at = editor.document.lineAt(2).text.indexOf('"type": "') + '"type": "'.length;
+    const list = await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', uri, new vscode.Position(2, at));
+    const labels = list.items.map(i => (typeof i.label === 'string' ? i.label : i.label.label).replace(/"/g, ''));
+    for (const t of ['chevron', 'flowchart', 'gantt']) assert.ok(labels.includes(t), `${t} not offered: ${labels.slice(0, 10).join(', ')}`);
+    assert.ok(labels.length >= 60, `only ${labels.length} part types`);
+  });
+
+  test('svgDiagram.jsonSchemas.enabled: off stops the checks, on brings them back', async function () {
+    this.timeout(60_000);
+    const uri = fixture('json/site.json');
+    await show(uri);
+    await errorsOf(uri);
+    await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', false, vscode.ConfigurationTarget.Global);
+    await noErrorsOf(uri);
+    assert.match(api()?.schemaRoot()?.reason ?? '', /jsonSchemas\.enabled/);
+    await vscode.workspace.getConfiguration('svgDiagram').update('jsonSchemas.enabled', true, vscode.ConfigurationTarget.Global);
+    await errorsOf(uri);
+  });
+
+  test('a site.json of a folder without svg-diagram open beside the project\'s: neither is checked until it closes', async function () {
+    this.timeout(60_000);
+    const other = unrelated('site.json');
+    const own = fixture('json/site.json');
+    await show(own);
+    await errorsOf(own); // the schema is live
+    await show(other);
+    await noErrorsOf(own);
+    await settle();
+    assert.deepEqual(jsonDiagnostics(other).map(d => d.message), [], 'the unrelated site.json got the project\'s schema');
+    assert.deepEqual(jsonDiagnostics(own).map(d => d.message), []);
+    assert.match(api()?.schemaRoot()?.reason ?? '', /unrelated\/site\.json（svg-diagram 無し）.*両方を検査できない/);
+    await close(other);
+    await errorsOf(own);
+    assert.ok(api()?.schemaRoot()?.dir);
+  });
+
+  test('a document that is not a file (the git side of a diff) counts as the file of its path', async function () {
+    this.timeout(60_000);
+    const own = fixture('json/site.json');
+    await show(own);
+    await errorsOf(own);
+    // like git:, a scheme that carries the file's path
+    const scheme = 'svgd-test-rev';
+    const reg = vscode.workspace.registerTextDocumentContentProvider(scheme, {provideTextDocumentContent: () => '{\n  "pages": ["a"],\n  "theme": "x"\n}\n'});
+    try {
+      const rev = unrelated('site.json').with({scheme, query: 'ref=HEAD'});
+      await show(rev);
+      await noErrorsOf(own);
+      await settle();
+      assert.deepEqual(jsonDiagnostics(rev).map(d => d.message), [], 'the revision of the unrelated site.json got the project\'s schema');
+      await close(rev);
+      await errorsOf(own);
+    } finally {
+      reg.dispose();
+    }
+  });
+
+  test('a core installed below the folder is seen when its file is reopened', async function () {
+    this.timeout(60_000);
+    const pkg = unrelated('pkg').fsPath;
+    const site = vscode.Uri.file(path.join(pkg, 'site.json'));
+    fs.mkdirSync(pkg, {recursive: true});
+    fs.writeFileSync(site.fsPath, '{\n  "decks": [],\n  "colour": 1\n}\n');
+    try {
+      await show(site);
+      await settle();
+      assert.deepEqual(jsonDiagnostics(site).map(d => d.message), []);
+      // pnpm -F pkg add …: a link into the store, below the workspace folder (not watched)
+      fs.mkdirSync(path.join(pkg, 'node_modules'));
+      fs.symlinkSync(fixture('node_modules/svg-diagram').fsPath, path.join(pkg, 'node_modules', 'svg-diagram'));
+      await close(site);
+      await show(site);
+      const found = await errorsOf(site);
+      assert.ok(found.some(d => /colour/.test(d.message)), found.map(d => d.message).join(' / '));
+      await close(site);
+    } finally {
+      fs.rmSync(pkg, {recursive: true, force: true});
+    }
+  });
+
 });

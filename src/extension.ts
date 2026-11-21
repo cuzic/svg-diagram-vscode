@@ -6,6 +6,8 @@ import {isDiagramSource} from './check.ts';
 import {describeCli, type ResolveResult, type ResolvedCli, resolveCli} from './cli.ts';
 import {Checker, findDiagramSources} from './diagnostics.ts';
 import {isSource, PREVIEW_VIEW_TYPE, PreviewManager} from './preview.ts';
+import {SchemaProvider} from './schema-provider.ts';
+import type {SchemaProject, SchemaRoot} from './schemas.ts';
 import {detectPackageManager, readSetupState, setupCommand} from './setup.ts';
 import {showMenu, Status} from './status.ts';
 import {SvgDiagramTaskProvider, TASK_TYPE} from './tasks.ts';
@@ -16,7 +18,7 @@ const warned = new Set<string>();
 const WINDOWS_UNSUPPORTED = 'svg-diagram の CLI（bin/svg-diagram）は bash のスクリプトなので、Windows ではこの拡張は動かない。WSL（Remote - WSL）で開く';
 
 /** What activate() returns (ext.exports). Only the integration tests use it. */
-export interface ExtensionApi { testing: {previewMessage(): unknown} }
+export interface ExtensionApi { testing: {previewMessage(): unknown; schemaRoot(): SchemaRoot | undefined} }
 
 export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const log = vscode.window.createOutputChannel('svg-diagram', {log: true});
@@ -30,6 +32,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const setSourceContext = (editor = vscode.window.activeTextEditor) =>
     void vscode.commands.executeCommand('setContext', 'svgDiagram.isSource', !!editor && isSource(editor.document));
   const tasks = new SvgDiagramTaskProvider(peekCli);
+  const schemas = new SchemaProvider({projectOf: schemaProject, log});
   const status = new Status({
     peekCli,
     isSourceActive: () => !!vscode.window.activeTextEditor && isSource(vscode.window.activeTextEditor.document),
@@ -45,13 +48,14 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     checker,
     preview,
     status,
+    schemas,
     vscode.window.onDidChangeActiveTextEditor(e => { setSourceContext(e); status.refresh(); }),
     vscode.workspace.onDidSaveTextDocument(doc => { if (doc === vscode.window.activeTextEditor?.document) { setSourceContext(); status.refresh(); } }),
     vscode.commands.registerCommand('svgDiagram.openPreview', (uri?: vscode.Uri) => openPreview(preview, uri, vscode.ViewColumn.Beside)),
     vscode.commands.registerCommand('svgDiagram.showPreview', (uri?: vscode.Uri) => openPreview(preview, uri, vscode.ViewColumn.Active)),
     checker.onBusyChange(busy => status.setBusy(busy)),
     vscode.window.tabGroups.onDidChangeTabs(() => status.refresh()),
-    vscode.window.onDidChangeWindowState(e => { if (e.focused) status.refresh(); }), // back from a terminal where svg-diagram was installed
+    vscode.window.onDidChangeWindowState(e => { if (e.focused) { status.refresh(); schemas.refresh(); } }), // back from a terminal where svg-diagram was installed
     vscode.tasks.registerTaskProvider(TASK_TYPE, tasks),
     vscode.commands.registerCommand('svgDiagram.menu', () => showMenu(!!peekCli(vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri))),
     vscode.commands.registerCommand('svgDiagram.typecheck', async () => {
@@ -90,6 +94,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       })),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('svgDiagram.cliPath')) { warned.clear(); logCliForAllFolders(); status.refresh(); }
+      if (e.affectsConfiguration('svgDiagram.cliPath') || e.affectsConfiguration('svgDiagram.jsonSchemas.enabled')) schemas.refresh();
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => logCliForAllFolders()),
   );
@@ -99,7 +104,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   checker.recheckOpen();
   setSourceContext();
   status.refresh();
-  return {testing: {previewMessage: () => preview.lastMessage}};
+  return {testing: {previewMessage: () => preview.lastMessage, schemaRoot: () => schemas.current}};
 }
 
 async function openPreview(preview: PreviewManager, uri: vscode.Uri | undefined, column: vscode.ViewColumn): Promise<void> {
@@ -118,6 +123,22 @@ async function isSourceFile(uri: vscode.Uri): Promise<boolean> {
 
 export function deactivate(): void {
   output = undefined;
+}
+
+/** The project of a file or folder, for the JSON Schemas (also on Windows: serving them runs nothing). */
+function schemaProject(scope: vscode.Uri): SchemaProject {
+  const folder = vscode.workspace.getWorkspaceFolder(scope);
+  const isFolder = !!folder && scope.toString() === folder.uri.toString();
+  const cliPath = vscode.workspace.getConfiguration('svgDiagram', folder ?? scope).inspect<string>('cliPath');
+  const from = isFolder ? scope.fsPath : path.dirname(scope.fsPath);
+  return {
+    cli: lookup(scope).cli,
+    // the project's own core, even when the setting or PATH is used to run the CLI
+    projectCli: resolveCli({from, folder: folder?.uri.fsPath, env: {}}).cli,
+    from,
+    folder: folder?.uri.fsPath,
+    settingIsGlobal: !(cliPath?.workspaceValue?.trim() || cliPath?.workspaceFolderValue?.trim()),
+  };
 }
 
 /**

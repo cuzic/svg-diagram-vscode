@@ -45,7 +45,7 @@ const statusItem = () => win.locator('.statusbar-item', {hasText: /svg-diagram/}
 
 test('the status bar shows the CLI version for a diagram source', async ({}, info) => {
   await expect(activeTab(win, 'untitled.diagram.ts')).toBeVisible();
-  await expect(statusItem()).toContainText('svg-diagram 0.5.0', {timeout: 60_000});
+  await expect(statusItem()).toContainText('svg-diagram 0.8.0', {timeout: 60_000});
   await shot(info, '1-status-bar');
 });
 

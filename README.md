@@ -6,7 +6,7 @@
 
 ## 対応する環境
 
-- Linux / macOS、および Windows の WSL（Remote - WSL）。**Windows では動かない**（core の CLI `bin/svg-diagram` が bash のスクリプトのため）。起動はするが、CLI を使う操作は理由を出して止まる。
+- Linux / macOS、および Windows の WSL（Remote - WSL）。**Windows では動かない**（core の CLI `bin/svg-diagram` が bash のスクリプトのため）。起動はするが、CLI を使う操作は理由を出して止まる（JSON の補完と検査は効く）。
 - VS Code 1.100 以降。信頼したワークスペースだけ。
 
 ## 方針
@@ -28,9 +28,24 @@
 - わかっている限界: 開いたままのファイルがエディタの外（git checkout など）で変わったとき、閉じているファイル（「すべて検査」の結果）が変わったときは、開き直すか保存するまで所見は古いまま。
 - error → エラー、warn → 警告、info → 情報。コードはルール名（`a11y-no-title` など）。CLI が直し方（`data.fix`）を返すときは、メッセージの 2 行目に出す。
 - 行番号を返すのは今は文書の検査（`doc-*`）だけ。レイアウトの所見は、帯の見出し（`data.band`）がソースの文字列に 1 回だけ現れればそこに、なければ 1 行目に付く（core がソースの位置を返すようになったら直す）。
-- core 0.5.0 以前は、ソースが throw すると JSON を出さずに止まる。そのときは stderr から、throw した行に `build-error` を付ける。
+- ソースが throw したときは `build-error`。core 0.8.0 は JSON で返すが行番号が無いので、1 行目に付く（core がソースの位置を返すようになったら直す）。core 0.5.0 以前は JSON を出さずに止まるので、stderr のスタックから throw した行に付ける。
 - コマンド: 「svg-diagram: この図を検査」「svg-diagram: ワークスペースの図をすべて検査」。
 - 設定: `svgDiagram.check.enabled` / `check.onSave` / `check.onOpen`（どれも既定 true）。
+
+## JSON の補完と検査（JSON Schema）
+
+`.svg-diagram.json`・`site.json`・デッキ（`deck.json`・`deck-*.json`・`*.deck.json`）を開くと、VS Code の JSON の補完・説明・誤りの表示が効く。部品の `type` は全種類から選べ、選ぶと説明と例のひな形が出る。`node_modules` の下のファイルは対象外。
+
+- 使う JSON Schema は**案件の svg-diagram のもの**（`node_modules/svg-diagram/schema/`、core 0.8.0 以降。ADR 0071）。CLI の検査と同じ版で検査する。npm には 0.5.0 までしかないので、今はリリースの tarball から入れる: `pnpm add -D https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz`（ビルド不要。npm でも同じ URL）。「この案件で svg-diagram を使えるようにする」は npm から入れるので 0.5.0 になり、JSON は検査しない。
+- 案件の svg-diagram は、そのファイルから上の、ワークスペースフォルダの中の `node_modules/svg-diagram`。設定 `svgDiagram.cliPath`（ワークスペース・フォルダの設定）があればそれ。`PATH` の svg-diagram、ユーザー設定の `svgDiagram.cliPath`、フォルダの外の `node_modules` のものは、そのファイルから上に `.svg-diagram.json` があるときだけ使う（なければ、案件の `node_modules` のもの）。
+- **ウィンドウで 1 つの JSON Schema を使う**（VS Code は schema を、どのファイルのためかを言わずに求めるので）。開いている対象の JSON ファイル（`site.json`・デッキ・`.svg-diagram.json`）の案件の svg-diagram が、みな同じ schema のとき（同じ core を別のパスから使う pnpm のモノレポ、同じ版を入れた別のフォルダも同じ）に、それで検査する。svg-diagram と関係ない案件のファイルや、schema の違う svg-diagram の案件のファイルが一緒に開いているときは、どれも検査しない（関係ないファイルに誤りを出さないため。どちらかを閉じると検査する。ほかの拡張がタブなしで読んだファイルは、数分で閉じられる）。git の差分の片側のようにファイルでないものは、そのパスのファイルとして数える（ワークスペースの外のパスなら、どの案件か分からないので検査しない）。どれも開いていなければ、svg-diagram のあるワークスペースフォルダがみな同じ schema のとき、それ。
+- 関係ない案件のファイルを開いた直後の一瞬（0.1 秒ほど）、svg-diagram の誤りが出てから消えることがある（VS Code が先に検査するため）。
+- ワークスペースフォルダの外のファイル（フォルダを開かずにファイルだけ開いたときも）は、上に `.svg-diagram.json` があるときだけ検査する。
+- 開き直したファイルは案件を探し直す（ワークスペースフォルダより下のパッケージに svg-diagram を入れたときは、そのファイルを閉じて開き直すか、ウィンドウにフォーカスを戻す）。
+- svg-diagram が 0.8.0 より古いとき、設定 `svgDiagram.jsonSchemas.enabled` が false のときも検査しない。どれを使ったか・なぜ検査しないかは、出力ログに出る。
+- デッキが指す図の `.json` は名前が決まっていないので、先頭に `"$schema": "./node_modules/svg-diagram/schema/figure.schema.json"` を書く（パスはそのファイルから）。`"$schema"` を書いたファイルは、拡張によらず VS Code がそれに従う。
+- svg-diagram を入れた・上げたときは、ワークスペースフォルダの直下の `node_modules` なら気づいて読み直す。
+- Windows でも効く（schema のファイルを読むだけで、CLI は走らせない）。信頼していないワークスペースでは、拡張ごと止まるので効かない。
 
 ## プレビュー
 
@@ -59,13 +74,14 @@
 - ワークスペースの直下に `node_modules/svg-diagram/package.json` がある
 - `.svg-diagram.json` がある（どこの階層でもよい）
 - TypeScript / JavaScript のファイルを開いたとき（CLI が PATH や設定にだけある案件のため。svg-diagram と関係ない案件では、ログに 1 行出すだけで何もしない）
+- VS Code が `site.json`・`deck.json` などの JSON Schema を求めたとき（関係ない案件では、すべて受け入れる schema を返すだけ）
 
 ## 開発
 
     pnpm install
     pnpm build          # dist/extension.cjs（--watch で監視）
     pnpm typecheck && pnpm lint && pnpm test
-    (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.5.0
+    (cd test/fixtures/workspace && npm install --no-package-lock)   # 結合テストが使う core 0.8.0（GitHub のリリースの tarball）
     pnpm test:integration   # 本物の VS Code を落として動かす（画面が要る。CI では xvfb-run）
     pnpm test:e2e       # 本物の VS Code の画面を Playwright で操作する（下）
     pnpm package        # .vsix を作る
@@ -76,7 +92,7 @@
 
 - CI は {Ubuntu（xvfb）, macOS} × {VS Code 1.100.0（engines の下限）, stable} で走らせ、スクリーンショット・trace・HTML レポートを artifact「e2e-<os>-<版>」に上げる（通ったときも）。
 - 手元の Linux で画面がないときは Chromium の headless（`--ozone-platform=headless`）で動く。`VSCODE_VERSION=1.100.0 pnpm test:e2e` で版を選べる。
-- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.5.0）。
+- 先に `test/fixtures/workspace` で `npm install --no-package-lock`（core 0.8.0。GitHub のリリースの tarball）。
 - テストの実行プロセスを kill -9 したときは VS Code が残る（別のプロセスグループで起動するため）: `pkill -f svgd-e2e-`。
 
 VS Code で開いて F5（「拡張を起動」）を押すと、`test/fixtures/workspace` を開いた別ウィンドウで拡張が動く。
@@ -90,6 +106,6 @@ core を手元で変えながら試すときは、設定 `svgDiagram.cliPath` �
 3. core（CLI）の見つけ方（済）
 4. `check --format json` → Problems パネル（済）
 5. ライブプレビュー（済）
-6. JSON spec の JSON Schema（core の PR が先）
+6. JSON の補完と検査（core 0.8.0 の JSON Schema。済）
 7. ステータスバー・`init` / `typecheck` のコマンド（済）
 8. 以降: ソース位置（core の ADR）、プレビュー ⇄ ソースのジャンプ、Quick Fix、Markdown、差分、AI 連携、公開
