@@ -1,10 +1,11 @@
 // The preview's page and the pieces of `build` it needs. No `vscode` import (unit-tested with node --test).
 import path from 'node:path';
 import {crashFinding} from './check.ts';
+import {hitTest, type PreviewMap} from './preview-locations.ts';
 
 /** `build` into a scratch file: nothing is written into the project; --no-lint so a figure with findings still shows (check reports them). */
-export function buildArgs(file: string, out: string): string[] {
-  return ['build', file, '--out', out, '--no-lint'];
+export function buildArgs(file: string, out: string, locations?: string): string[] {
+  return ['build', file, '--out', out, '--no-lint', ...(locations ? ['--locations', locations] : [])];
 }
 
 const layoutFailure = 'layout verification failed before any SVG was written:';
@@ -67,7 +68,7 @@ export function inlineSvg(svg: string): string {
 /** Messages from the extension to the page. */
 export type ToPage =
   | {kind: 'building'; title: string; file: string}
-  | {kind: 'svg'; title: string; file: string; svg: string; builtAt: string}
+  | {kind: 'svg'; title: string; file: string; svg: string; builtAt: string; build: string; map?: PreviewMap}
   | {kind: 'error'; title: string; file: string; message: string};
 
 /**
@@ -97,9 +98,12 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
   .stage.bg-light { background: #fff; }
   .stage.bg-dark { background: #1e1e1e; }
   .stage.bg-checker { background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
-  .stage svg { display: block; max-width: none; }
-  .stage.fit svg { width: 100% !important; height: auto !important; }
-  .stage:not(:has(svg)) { background: none; padding: 0; }
+  .stage > svg { display: block; max-width: none; }
+  .stage.fit > svg { width: 100% !important; height: auto !important; }
+  .stage:not(:has(> svg)) { background: none; padding: 0; }
+  .hit-outline { pointer-events: none; overflow: visible; }
+  .hit-outline > * { fill: none; stroke: #007acc; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .hit-tooltip { position: fixed; z-index: 2; pointer-events: none; padding: 3px 6px; border-radius: 3px; color: var(--vscode-editorHoverWidget-foreground); background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-editorHoverWidget-border, transparent); }
   .empty { padding: 16px; opacity: .7; }
 </style>
 </head>
@@ -115,22 +119,91 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
 </div>
 <div class="error" id="error" role="alert"></div>
 <div class="stage fit bg-light" id="stage"><div class="empty">図のソースを保存すると、ここに描く。</div></div>
+<div class="hit-tooltip" id="hit-tooltip" role="tooltip" hidden></div>
 <script nonce="${nonce}">
 (() => {
+  const hitTest = (${String(hitTest)});
   const vscode = acquireVsCodeApi();
   const $ = id => document.getElementById(id);
-  const stage = $('stage'), state = $('state'), error = $('error');
+  const stage = $('stage'), state = $('state'), error = $('error'), tooltip = $('hit-tooltip');
+  const rootSvg = () => stage.querySelector(':scope > svg');
   const BGS = [['light', '白'], ['dark', '暗'], ['checker', '格子']];
   let view = Object.assign({fit: true, zoom: 1, bg: 0}, vscode.getState()?.view);
   let natural = null; // the SVG's own width/height (px)
-  let shownFile = null; // the source of the SVG on the stage
+  let shown = null;
+  let outline = null;
+  let hovered = null;
+  let press = null;
+
+  function hitAt(event) {
+    if (!shown?.map) return;
+    const matrix = rootSvg()?.getScreenCTM();
+    const scale = matrix && Math.hypot(matrix.a, matrix.b);
+    if (!scale) return;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+    return hitTest(shown.map, point, 1 / scale);
+  }
+
+  function svgElement(name, attrs) {
+    const element = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
+    return element;
+  }
+
+  function highlight(hit, event) {
+    if (hovered !== hit) {
+      outline?.remove();
+      outline = null;
+      hovered = hit;
+      stage.style.cursor = hit ? 'pointer' : '';
+      tooltip.hidden = !hit;
+      if (hit) {
+        outline = svgElement('svg', {class: 'hit-outline', width: '100%', height: '100%', 'aria-hidden': 'true'});
+        if ('segments' in hit) {
+          const d = hit.segments.map(([x1, y1, x2, y2]) => 'M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2).join(' ');
+          outline.append(svgElement('path', {d}));
+        } else {
+          const {x, y, w, h} = hit.rect;
+          outline.append(svgElement('rect', {x, y, width: w, height: h}));
+        }
+        rootSvg().append(outline);
+        tooltip.textContent = hit.label ? hit.kind + ' · ' + hit.label : hit.kind;
+      }
+    }
+    if (hit) {
+      tooltip.style.left = Math.max(0, Math.min(event.clientX + 12, window.innerWidth - tooltip.offsetWidth)) + 'px';
+      tooltip.style.top = Math.max(0, Math.min(event.clientY + 12, window.innerHeight - tooltip.offsetHeight)) + 'px';
+    }
+  }
+
+  stage.addEventListener('pointermove', event => highlight(hitAt(event), event));
+  stage.addEventListener('pointerleave', () => highlight());
+  window.addEventListener('pointerdown', event => {
+    press = event.isPrimary && event.button === 0 && shown?.map && stage.contains(event.target)
+      ? {pointerId: event.pointerId, x: event.clientX, y: event.clientY, dragged: false} : null;
+  });
+  function trackDrag(event) {
+    if (press?.pointerId === event.pointerId && Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 4) press.dragged = true;
+  }
+  window.addEventListener('pointermove', trackDrag);
+  window.addEventListener('pointerup', trackDrag);
+  window.addEventListener('pointercancel', () => { press = null; });
+  window.addEventListener('blur', () => { press = null; highlight(); });
+  stage.addEventListener('click', event => {
+    const clicked = press;
+    press = null;
+    if (!clicked || clicked.dragged) return;
+    const hit = hitAt(event);
+    if (hit) vscode.postMessage({kind: 'reveal', build: shown.build, id: hit.id});
+  });
 
   function applyView() {
+    highlight();
     stage.classList.toggle('fit', view.fit);
     $('fit').setAttribute('aria-pressed', String(view.fit));
     stage.className = stage.className.replace(/\\bbg-\\w+/, 'bg-' + BGS[view.bg][0]);
     $('bg').textContent = '背景: ' + BGS[view.bg][1];
-    const svg = stage.querySelector('svg');
+    const svg = rootSvg();
     if (svg && natural && !view.fit) { svg.style.width = natural.w * view.zoom + 'px'; svg.style.height = natural.h * view.zoom + 'px'; }
     $('actual').textContent = view.fit ? '100%' : Math.round(view.zoom * 100) + '%';
     vscode.setState({...vscode.getState(), view});
@@ -145,27 +218,37 @@ export function previewShellHtml(opts: {cspSource: string; nonce: string}): stri
   function show(msg) {
     $('title').textContent = msg.title;
     // the drawing on the stage is of another source: never show it under this one's title
-    if (msg.kind !== 'svg' && shownFile !== msg.file) { stage.innerHTML = ''; natural = null; shownFile = null; }
+    if (msg.kind !== 'svg' && shown?.file !== msg.file) {
+      highlight();
+      stage.innerHTML = '';
+      natural = shown = press = null;
+    }
     // the banner is about the file it was sent for: switching to another file takes it down
     if (msg.kind === 'building' && error.dataset.file !== msg.file) error.classList.remove('shown');
     if (msg.kind === 'building') { state.textContent = '描いている…'; state.classList.remove('stale'); return; }
     if (msg.kind === 'error') {
       error.textContent = msg.message; error.dataset.file = msg.file; error.classList.add('shown');
-      const has = !!stage.querySelector('svg');
+      const has = !!rootSvg();
       state.textContent = has ? '古い図（今のソースは描けない）' : '描けない'; state.classList.add('stale');
       return;
     }
     error.classList.remove('shown');
+    highlight();
     stage.innerHTML = msg.svg; // scripts inserted by innerHTML never run; the CSP blocks the rest
-    shownFile = msg.file;
-    const svg = stage.querySelector('svg');
+    shown = msg;
+    press = null;
+    const svg = rootSvg();
     const vb = svg?.viewBox?.baseVal;
     natural = svg ? {w: parseFloat(svg.getAttribute('width')) || vb?.width || 800, h: parseFloat(svg.getAttribute('height')) || vb?.height || 600} : null;
     state.textContent = msg.builtAt + ' に描いた'; state.classList.remove('stale');
     applyView();
   }
-  window.addEventListener('message', e => { show(e.data); vscode.setState({...vscode.getState(), last: e.data, view}); });
-  const last = vscode.getState()?.last;
+  window.addEventListener('message', e => {
+    show(e.data);
+    vscode.setState({...vscode.getState(), last: e.data, drawing: e.data.kind === 'svg' ? undefined : shown, view});
+  });
+  const {last, drawing} = vscode.getState() ?? {};
+  if (drawing && drawing.file === last?.file) show(drawing);
   if (last) show(last);
   applyView();
   vscode.postMessage({kind: 'ready'});

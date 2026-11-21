@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "svg-diagram": "https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz"
+    "svg-diagram": "https://github.com/cuzic/svg-diagram/releases/download/v0.9.0/svg-diagram-0.9.0.tgz"
   }
 }

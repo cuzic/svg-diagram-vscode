@@ -55,7 +55,7 @@ const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const ACCEPT_ALL = `${JSON.stringify({$comment: 'svg-diagram: no JSON Schema to check this file with (see the svg-diagram output log)'})}\n`;
 
 /** How to get a core with the schemas (npm has only 0.5.0 so far). */
-export const CORE_TARBALL = 'https://github.com/cuzic/svg-diagram/releases/download/v0.8.0/svg-diagram-0.8.0.tgz';
+export const CORE_TARBALL = 'https://github.com/cuzic/svg-diagram/releases/download/v0.9.0/svg-diagram-0.9.0.tgz';
 export const SCHEMA_CORE_HINT = `0.8.0 以降で効く（npm には 0.5.0 までしかないので、\`pnpm add -D ${CORE_TARBALL}\`）`;
 
 /** One project, as found for a file (or a folder). */
